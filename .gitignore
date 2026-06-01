@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Environments
+.venv/
+.env
+.env.*
+
+# macOS
+.DS_Store
+
+# Data and outputs
+data/raw/
+data/processed/
+outputs/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# Private / copyrighted references
+references/private_papers/
