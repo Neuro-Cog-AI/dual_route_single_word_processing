@@ -1,12 +1,10 @@
 # dual_route_single_word_processing
 
-A faithful PyTorch reimplementation of **Lichtheim 2** — a neurocomputational dual-route model of single-word processing — from:
+This repository contains work toward a faithful PyTorch reimplementation of the **Lichtheim 2** neurocomputational model of dual dorsal-ventral language pathways, as described in:
 
 > Ueno, T., Saito, S., Rogers, T. T., & Lambon Ralph, M. A. (2011).
 > *Lichtheim 2: Synthesizing Aphasia and the Neural Basis of Language in a Neurocomputational Model of the Dual Dorsal-Ventral Language Pathways.*
 > Neuron, 72(2), 385–396.
-
-Research internship at **LSCP / ENS Paris**, supervised by **Yair Lakretz**.
 
 ---
 
@@ -33,7 +31,7 @@ Decisions are tagged throughout the documentation:
 - `[Paper §X]` — stated in the main text of Ueno et al. 2011
 - `[Supp §X]` — stated in the supplementary materials
 - `[Inferred]` — our best-effort inference for a PyTorch reimplementation
-- `[Open]` — unclear, to be confirmed with Yair Lakretz
+- `[Open]` — unclear; unresolved design decision (see [docs/open_questions.md](docs/open_questions.md))
 
 No claim of faithfulness will be made until the architecture and training dynamics have been validated against the paper.
 
@@ -92,11 +90,19 @@ dual_route_single_word_processing/
 
 ---
 
-## Setup
+## Development Setup
 
 > Implementation begins in Phase 1. No installable package yet.
 
-Requires Python 3.10+. Dependencies will be minimal: PyTorch, NumPy, PyYAML, pytest.
+A dedicated Python environment is recommended:
+
+```bash
+conda create -n lichtheim2 python=3.11
+conda activate lichtheim2
+pip install pytest pyyaml ruff black
+```
+
+PyTorch and NumPy will be added as implementation dependencies in Phase 1.
 
 To run the (placeholder) test suite:
 
