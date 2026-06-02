@@ -1,0 +1,35 @@
+# Toy configuration — synthetic data only
+# Used to validate tick-by-tick dynamics in Phase 1.
+# Layer sizes are intentionally reduced.
+# Do NOT use for faithful replication (see configs/faithful.yaml when it exists).
+
+model:
+  # Reduced layer sizes for fast forward-pass testing
+  sound_input_size: 5        # paper: 21
+  motor_output_size: 5       # paper: 21
+  iSMG_hidden_size: 8        # paper: 50
+  mSTG_hidden_size: 10       # paper: 200
+  aSTG_hidden_size: 10       # paper: 650
+  triangularis_hidden_size: 10  # paper: 200
+  vATL_size: 6               # paper: 50
+
+data:
+  vocab_size: 4              # tiny synthetic vocabulary
+  phonological_bits: 5       # must match sound_input_size
+  semantic_bits: 6           # must match vATL_size
+  use_synthetic: true        # always true for toy config
+  random_seed: 42
+
+tasks:
+  repetition_ticks: 6        # 3 input + 3 output
+  comprehension_ticks: 3
+  speaking_ticks: 3
+
+training:
+  epochs: 5
+  learning_rate: 0.1
+  online: true               # item-by-item updates
+  presentations_per_word:
+    repetition: 1
+    speaking: 2
+    comprehension: 3

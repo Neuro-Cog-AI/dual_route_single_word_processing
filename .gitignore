@@ -23,5 +23,22 @@ checkpoints/
 *.pth
 *.ckpt
 
-# Private / copyrighted references
+# Private / copyrighted references and data
 references/private_papers/
+data/raw/
+data/processed/
+
+# Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Large outputs and logs
+wandb/
+*.log
+*.pkl
+*.pdf
+
+# Packaging
+dist/
+build/
+*.egg-info/
