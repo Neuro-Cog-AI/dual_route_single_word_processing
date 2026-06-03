@@ -16,7 +16,7 @@ class Lichtheim2Model(nn.Module):
     """Tick-by-tick Lichtheim 2 neurocomputational model.
 
     Implements the dual dorsal-ventral architecture from Ueno et al. (2011)
-    with explicit LayerState objects and manual copy-back connections following
+    with explicit ModelState objects and manual copy-back connections following
     Supplemental Figure S1.
 
     Bias convention [Paper]: copy and Elman layers receive no bias; all other
@@ -109,6 +109,10 @@ class Lichtheim2Model(nn.Module):
         new_motor = torch.sigmoid(motor_net)
 
         # 6. Copy-back update — context fields set at end of tick [Supp Fig S1]
+        # vATL_context is always set to vATL_out of this tick, even when the input
+        # was externally clamped (speaking task). In speaking, every tick is clamped,
+        # so vATL_context is populated but never used; the next tick's clamp overrides
+        # it. No mutation of the clamp tensor is needed.
         new_state = ModelState(
             iSMG=new_iSMG,
             iSMG_context=new_iSMG,          # Elman: copy current iSMG
@@ -117,7 +121,7 @@ class Lichtheim2Model(nn.Module):
             mSTG=new_mSTG,
             aSTG=new_aSTG,
             vATL_out=new_vATL_out,
-            vATL_context=new_vATL_out,       # prepared for next tick; may be overridden by clamp
+            vATL_context=new_vATL_out,       # prepared for next tick
             triangularis=new_triangularis,
         )
         return new_state, vATL_input_used
@@ -141,6 +145,8 @@ class Lichtheim2Model(nn.Module):
 
         for t, (sound, clamp_vATL) in enumerate(tick_inputs):
             new_state, vATL_used = self.forward_tick(state, sound, clamp_vATL)
+            # build_trial_inputs always returns actual tensors for sound (never None);
+            # the None branch below is a safety net for hypothetical direct callers.
             results.append(TickResult(
                 tick_index=t,
                 task=task,

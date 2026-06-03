@@ -2,42 +2,43 @@
 
 Phased plan for the Lichtheim 2 PyTorch reimplementation.
 
-**Rule:** No phase may begin until the success criterion of the previous phase is confirmed in discussion with Yair.
+**Rule:** No phase may begin until the success criterion of the previous phase has been reviewed and confirmed.
 
 ---
 
-## Phase 0 — Repo Scaffold and Specification (current)
+## Phase 0 — Repo Scaffold and Specification — **Complete**
 
 **Goal:** Establish the repository structure, documentation, and specification before writing any model code.
 
 **Deliverables:**
 - `README.md`, `.gitignore`, branch structure
 - `docs/replication_spec.md`: precise layer/pathway/tick specification
-- `docs/open_questions.md`: questions for Yair
+- `docs/open_questions.md`: open design decisions
 - `docs/architecture_notes.md`, `docs/training_notes.md`, `docs/data_encoding_notes.md`
 - `configs/toy.yaml`: minimal synthetic config
 - `src/lichtheim2/__init__.py`: package marker
-- `tests/test_placeholder.py`: placeholder test
 
-**Success criterion:** All spec questions answered or explicitly flagged `[Open]`. PR merged to `develop`.
+**Success criterion:** All spec questions answered or explicitly flagged `[Open]`. PR merged to `develop`. ✓
 
 ---
 
-## Phase 1 — Toy Tick-by-Tick Forward Pass
+## Phase 1 — Toy Tick-by-Tick Forward Pass — **Complete**
 
 **Goal:** Implement and validate the tick-by-tick activation dynamics in isolation, using the toy config. No training, no real data.
 
 **Deliverables:**
-- `src/lichtheim2/layers.py`: `LayerState` dataclass and sigmoid activation
-- `src/lichtheim2/model.py`: `Lichtheim2Model` with explicit `forward_tick()` and `run_trial()` methods
-- `src/lichtheim2/tasks.py`: trial construction for repetition, comprehension, speaking
-- `tests/test_tick_dynamics.py`: unit tests for forward pass shape, activation range, copy-back
+- `src/lichtheim2/config.py`: `ModelConfig` dataclass, `load_config()`
+- `src/lichtheim2/layers.py`: `ModelState`, `TickResult` dataclasses; `init_state()`
+- `src/lichtheim2/model.py`: `Lichtheim2Model` with `forward_tick()` (returns `(ModelState, vATL_input_used)`) and `run_trial()` (returns `list[TickResult]`)
+- `src/lichtheim2/tasks.py`: `Task` enum, `build_trial_inputs()` for repetition, comprehension, speaking
+- `conftest.py`: `sys.path` shim (temporary, until `pyproject.toml`)
+- `tests/test_tick_dynamics.py`: tests covering shapes, copy-back chain, task schedules
 
-**Success criterion:** Pytest passes; forward pass runs end-to-end for all three task types with toy-config layer sizes; activations remain in [0, 1].
+**Success criterion:** Pytest passes; forward pass runs end-to-end for all three task types; activations in [0, 1]; carry state verified to influence computation. ✓
 
 ---
 
-## Phase 2 — Faithful Architecture
+## Phase 2 — Faithful Architecture — **Next**
 
 **Goal:** Scale to the full layer sizes from the paper and implement all pathways and copy-back mechanisms faithfully.
 
@@ -64,7 +65,7 @@ Phased plan for the Lichtheim 2 PyTorch reimplementation.
 - `scripts/train_faithful.py`: training entry point
 - Figure 2-like learning curve plot
 
-**Success criterion:** Model reaches near-perfect performance on all three tasks in a similar number of epochs as reported in the paper. Curve shape qualitatively matches Figure 2. Confirmed with Yair.
+**Success criterion:** Model reaches near-perfect performance on all three tasks in a similar number of epochs as reported in the paper. Curve shape qualitatively matches Figure 2. To be reviewed before moving to Phase 4.
 
 ---
 
@@ -77,7 +78,7 @@ Phased plan for the Lichtheim 2 PyTorch reimplementation.
 - Recovery training loop (retrain after lesion)
 - Replication of key lesion figures / tables from Ueno et al.
 
-**Success criterion:** Selective dorsal/ventral lesions produce the expected aphasic profiles (e.g., phonological repetition spared with ventral lesion; semantic comprehension impaired with ventral lesion). Confirmed with Yair.
+**Success criterion:** Selective dorsal/ventral lesions produce the expected aphasic profiles (e.g., phonological repetition spared with ventral lesion; semantic comprehension impaired with ventral lesion). To be reviewed before moving to Phase 5.
 
 ---
 
@@ -90,7 +91,7 @@ Phased plan for the Lichtheim 2 PyTorch reimplementation.
 - RSA / MDS / t-SNE visualisations
 - Comparison to human neuroimaging data where available
 
-**Success criterion:** TBD with Yair.
+**Success criterion:** TBD.
 
 ---
 
@@ -106,4 +107,4 @@ Phased plan for the Lichtheim 2 PyTorch reimplementation.
 
 See [docs/open_questions.md](open_questions.md) for the full list.
 
-**Success criterion:** TBD with Yair after Phase 3.
+**Success criterion:** TBD after Phase 3 is confirmed.
