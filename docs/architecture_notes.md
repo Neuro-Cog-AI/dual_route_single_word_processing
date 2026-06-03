@@ -25,36 +25,63 @@ PyTorch's built-in recurrent modules (`nn.RNN`, `nn.LSTM`, `nn.GRU`) are inappro
 
 ---
 
-## Proposed Implementation Pattern
+## Implemented Pattern (Phase 1)
 
-### `LayerState`
+### `ModelState` and `TickResult` (`src/lichtheim2/layers.py`)
 
-A simple dataclass holding the current activation of a layer:
+`ModelState` is a flat dataclass holding **all** layer activations and copy-back context fields as 1-D tensors. It is the **between-tick carry state** — it holds what the next tick needs as context, not a record of the inputs used during this tick.
 
 ```python
 @dataclass
-class LayerState:
-    activation: torch.Tensor   # shape: (layer_size,)
-    context: torch.Tensor      # copy-back / Elman context, same shape
+class ModelState:
+    iSMG: Tensor;  iSMG_context: Tensor   # Elman carry
+    motor: Tensor; motor_context: Tensor   # motor copy-back
+    mSTG: Tensor;  aSTG: Tensor
+    vATL_out: Tensor                       # computed this tick
+    vATL_context: Tensor                   # = vATL_out; used as vATL input next tick
+    triangularis: Tensor
 ```
 
-### `Lichtheim2Model`
-
-A `nn.Module` holding all weight matrices as `nn.Parameter` objects and implementing:
+`TickResult` is a per-tick record returned by `run_trial`, capturing everything that happened:
 
 ```python
-def forward_tick(self, state: ModelState, tick: int, task: Task) -> ModelState:
-    """Advance all layers by one tick given current state, tick index, and task."""
-    ...
+@dataclass
+class TickResult:
+    tick_index: int
+    task: Task
+    sound_input: Tensor        # actual sound fed in (zeros if silent tick)
+    vATL_input_used: Tensor    # actual vATL fed into aSTG (context or external clamp)
+    state: ModelState          # all activations after this tick
+```
+
+### `Lichtheim2Model` (`src/lichtheim2/model.py`)
+
+A `nn.Module` holding all weight matrices as `nn.Linear` layers. The two key methods:
+
+```python
+def forward_tick(
+    self,
+    state: ModelState,
+    sound: Tensor | None = None,
+    clamp_vATL_in: Tensor | None = None,
+) -> tuple[ModelState, Tensor]:
+    """One tick: dorsal + ventral forward pass + copy-back update.
+
+    Returns (new_state, vATL_input_used).
+    vATL_input_used is state.vATL_context or clamp_vATL_in (speaking task).
+    Fully differentiable — no detach/no_grad inside.
+    """
 ```
 
 ```python
-def run_trial(self, task: Task, inputs: TrialInputs) -> TrialOutputs:
-    """Run a full trial (e.g. 6 ticks for repetition) and return outputs at scored ticks."""
-    state = self.init_state()
-    for t in range(task.n_ticks):
-        state = self.forward_tick(state, t, task)
-    return self.extract_outputs(state, task)
+def run_trial(
+    self,
+    task: Task,
+    phon_pattern: Tensor,   # (n_morae, sound_size)
+    sem_pattern: Tensor,    # (vATL_size,)
+    cfg: ModelConfig,
+) -> list[TickResult]:
+    """Run all ticks; return one TickResult per tick for full inspection."""
 ```
 
 ### Why explicit ticks?
@@ -67,12 +94,13 @@ def run_trial(self, task: Task, inputs: TrialInputs) -> TrialOutputs:
 
 ## Weight Matrix Convention
 
-Each connection between layer A and layer B is a single `nn.Linear` (no bias by default, unless the supplement specifies otherwise `[Open]`):
+Each connection between layer A and layer B is a single `nn.Linear`. Sizes below are the faithful (Phase 2) values; Phase 1 uses toy sizes from `configs/toy.yaml` via `ModelConfig`:
 
 ```python
-self.sound_to_iSMG     = nn.Linear(21, 50, bias=True)   # [Inferred: bias present]
-self.iSMG_ctx_to_iSMG  = nn.Linear(50, 50, bias=False)  # Elman context
-self.iSMG_to_motor     = nn.Linear(50, 21, bias=True)
+self.sound_to_iSMG      = nn.Linear(21, 50, bias=True)   # [Inferred: bias present]
+self.iSMG_elman         = nn.Linear(50, 50, bias=False)   # Elman; no bias [Paper]
+self.motor_copy_to_iSMG = nn.Linear(21, 50, bias=False)   # copy;  no bias [Paper]
+self.iSMG_to_motor      = nn.Linear(50, 21, bias=True)
 # ... etc.
 ```
 

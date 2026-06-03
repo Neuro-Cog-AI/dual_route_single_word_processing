@@ -3,6 +3,7 @@
 Uses configs/toy.yaml throughout. A module-level cfg and model are
 constructed once; individual tests are stateless (no shared mutable state).
 """
+from dataclasses import replace as dc_replace
 from pathlib import Path
 
 import torch
@@ -193,3 +194,27 @@ def test_tick_indices_correct():
         for expected, r in enumerate(results):
             assert r.tick_index == expected, \
                 f"{task.name}: expected tick_index {expected}, got {r.tick_index}"
+
+
+def test_carry_chain_influences_computation():
+    """iSMG_context must actually influence next-tick iSMG via the Elman connection.
+
+    Two states that are identical in every field except iSMG_context must
+    produce different iSMG activations when given the same sound input.
+    This is deterministic: state fields and sound are explicitly set (no random data).
+    """
+    base = init_state(cfg)
+    # state_a: iSMG_context = 0.5 (from init_state)
+    state_a = base
+    # state_b: iSMG_context = 0.0 — only this field differs
+    state_b = dc_replace(base, iSMG_context=torch.zeros(cfg.iSMG_hidden_size))
+
+    sound = torch.full((cfg.sound_input_size,), 0.3)  # fixed non-trivial input
+
+    result_a, _ = model.forward_tick(state_a, sound=sound)
+    result_b, _ = model.forward_tick(state_b, sound=sound)
+
+    assert not torch.allclose(result_a.iSMG, result_b.iSMG), (
+        "iSMG_context must influence iSMG computation via the Elman connection; "
+        "states differing only in iSMG_context must produce different iSMG outputs"
+    )

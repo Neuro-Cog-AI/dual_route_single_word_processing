@@ -43,9 +43,9 @@ See [docs/roadmap.md](docs/roadmap.md) for the full phased plan.
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 0 | Repo scaffold and specification | In progress |
-| 1 | Toy tick-by-tick forward pass | Pending |
-| 2 | Faithful architecture (all layers, all paths) | Pending |
+| 0 | Repo scaffold and specification | Complete |
+| 1 | Toy tick-by-tick forward pass | Complete |
+| 2 | Faithful architecture (all layers, all paths) | Next |
 | 3 | Training and Figure 2-like learning curves | Pending |
 | 4 | Lesioning and recovery | Pending |
 | 5 | Representational similarity analyses | Pending |
@@ -70,9 +70,9 @@ The `.gitignore` enforces these exclusions. Private materials belong in `referen
 
 ```
 dual_route_single_word_processing/
-├── configs/          # YAML experiment configurations
-│   └── toy.yaml      # Minimal synthetic config for Phase 1 validation
-├── docs/             # Scientific documentation and specification
+├── configs/              # YAML experiment configurations
+│   └── toy.yaml          # Minimal synthetic config for Phase 1 validation
+├── docs/                 # Scientific documentation and specification
 │   ├── roadmap.md
 │   ├── replication_spec.md
 │   ├── open_questions.md
@@ -80,10 +80,15 @@ dual_route_single_word_processing/
 │   ├── training_notes.md
 │   └── data_encoding_notes.md
 ├── src/
-│   └── lichtheim2/   # Python package (implementation begins Phase 1)
-│       └── __init__.py
-├── tests/            # Pytest test suite
-│   └── test_placeholder.py
+│   └── lichtheim2/       # Python package
+│       ├── __init__.py
+│       ├── config.py     # ModelConfig dataclass, load_config()
+│       ├── layers.py     # ModelState, TickResult dataclasses, init_state()
+│       ├── model.py      # Lichtheim2Model: forward_tick, run_trial
+│       └── tasks.py      # Task enum, build_trial_inputs()
+├── tests/                # Pytest test suite
+│   └── test_tick_dynamics.py
+├── conftest.py           # sys.path shim (temporary, until pyproject.toml)
 ├── .gitignore
 └── README.md
 ```
@@ -92,7 +97,7 @@ dual_route_single_word_processing/
 
 ## Development Setup
 
-> Implementation begins in Phase 1. No installable package yet.
+> Phase 1 (toy tick-by-tick dynamics) is implemented. No installable package yet — `pyproject.toml` is deferred.
 
 A dedicated Python environment is recommended:
 
@@ -120,5 +125,5 @@ python -m pytest tests/ -v
 
 - `main` — stable; receives only milestone PRs
 - `develop` — integration branch
-- Feature work on short branches from `develop` (e.g., `feat/repo-scaffold-and-spec`)
+- Feature work on short branches from `develop` (e.g., `feat/phase-2-faithful-arch`, `fix/copy-back-order`)
 - Do not commit copyrighted material, raw data, or model weights
