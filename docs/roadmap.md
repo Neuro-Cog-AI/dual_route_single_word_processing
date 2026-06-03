@@ -57,7 +57,7 @@ Phase 2 is split into sub-steps:
 **Goal:** Implement the faithful weight initialisation from the paper and verify all connection biases.
 
 **Deliverables:**
-- Faithful weight init: uniform [−1, 1] for most weights; [−0.5, 0.5] for recurrent; bias to hidden = −1 `[Paper]`
+- Faithful weight init: implement and test the paper/supplement initialisation scheme, including recurrent weight ranges and bias-link conventions
 - `configs/lichtheim2.yaml` may gain a `weight_init:` section
 - Tests for weight ranges and bias values
 
@@ -77,7 +77,7 @@ Phase 2 is split into sub-steps:
 - `scripts/train_faithful.py`: training entry point
 - Figure 2-like learning curve plot
 
-**Success criterion:** Model reaches near-perfect performance on all three tasks in a similar number of epochs as reported in the paper. Curve shape qualitatively matches Figure 2. To be reviewed before moving to Phase 4.
+**Success criterion:** Model reproduces the qualitative learning profile reported in Figure 2: repetition develops first, followed by comprehension, then speaking/naming, with appropriate frequency effects. To be reviewed before moving to Phase 4.
 
 ---
 
