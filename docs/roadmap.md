@@ -38,18 +38,30 @@ Phased plan for the Lichtheim 2 PyTorch reimplementation.
 
 ---
 
-## Phase 2 — Faithful Architecture — **Next**
+## Phase 2 — Faithful Architecture — **In Progress**
 
-**Goal:** Scale to the full layer sizes from the paper and implement all pathways and copy-back mechanisms faithfully.
+Phase 2 is split into sub-steps:
+
+### Phase 2a — Architecture Skeleton — **In Progress**
+
+**Goal:** Instantiate `Lichtheim2Model` with the real Lichtheim 2 layer sizes and validate forward dynamics on dummy tensors. No training, no faithful weight initialisation, no real data.
 
 **Deliverables:**
-- Full-size weight matrices matching `[Paper]` / `[Supp]` layer sizes
-- Dorsal path: sound input → iSMG (Elman recurrence) → insular-motor output
-- Ventral path: sound input → mSTG/STS → aSTG/STS → vATL (input/output split) → triangularis-opercularis → insular-motor output
-- `configs/faithful.yaml`: full-size configuration
-- Tests verifying connectivity and copy-back state updates
+- `configs/lichtheim2.yaml`: full-size layer configuration with `metadata:` block for reference values
+- `tests/test_faithful_architecture.py`: tests for real-size shapes, activation range, copy-back, and task tick counts
 
-**Success criterion:** All three task types run forward with full-size layers; copy-back states updated correctly at each tick; all `[Open]` items from Phase 0 resolved.
+**Success criterion:** All three task types run `forward_tick` and `run_trial` with faithful layer sizes; shapes correct; activations in [0, 1].
+
+### Phase 2b — Faithful Weight Initialisation and Connectivity Audit
+
+**Goal:** Implement the faithful weight initialisation from the paper and verify all connection biases.
+
+**Deliverables:**
+- Faithful weight init: uniform [−1, 1] for most weights; [−0.5, 0.5] for recurrent; bias to hidden = −1 `[Paper]`
+- `configs/lichtheim2.yaml` may gain a `weight_init:` section
+- Tests for weight ranges and bias values
+
+**Success criterion:** Weight statistics match paper spec; `[Open]` items from Phase 0 relating to architecture resolved.
 
 ---
 

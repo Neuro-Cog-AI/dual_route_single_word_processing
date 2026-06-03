@@ -45,7 +45,7 @@ See [docs/roadmap.md](docs/roadmap.md) for the full phased plan.
 |-------|-------------|--------|
 | 0 | Repo scaffold and specification | Complete |
 | 1 | Toy tick-by-tick forward pass | Complete |
-| 2 | Faithful architecture (all layers, all paths) | Next |
+| 2 | Faithful architecture (all layers, all paths) | In progress (Phase 2a) |
 | 3 | Training and Figure 2-like learning curves | Pending |
 | 4 | Lesioning and recovery | Pending |
 | 5 | Representational similarity analyses | Pending |
@@ -71,7 +71,8 @@ The `.gitignore` enforces these exclusions. Private materials belong in `referen
 ```
 dual_route_single_word_processing/
 ├── configs/              # YAML experiment configurations
-│   └── toy.yaml          # Minimal synthetic config for Phase 1 validation
+│   ├── toy.yaml          # Minimal synthetic config for Phase 1 validation
+│   └── lichtheim2.yaml   # Faithful layer sizes from Ueno et al. (2011)
 ├── docs/                 # Scientific documentation and specification
 │   ├── roadmap.md
 │   ├── replication_spec.md
@@ -87,7 +88,8 @@ dual_route_single_word_processing/
 │       ├── model.py      # Lichtheim2Model: forward_tick, run_trial
 │       └── tasks.py      # Task enum, build_trial_inputs()
 ├── tests/                # Pytest test suite
-│   └── test_tick_dynamics.py
+│   ├── test_tick_dynamics.py
+│   └── test_faithful_architecture.py
 ├── conftest.py           # sys.path shim (temporary, until pyproject.toml)
 ├── .gitignore
 └── README.md

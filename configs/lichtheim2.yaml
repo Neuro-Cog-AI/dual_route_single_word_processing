@@ -1,0 +1,33 @@
+# Faithful Lichtheim 2 configuration
+# Phase 2a: architecture skeleton — validates real layer sizes and forward dynamics.
+#
+# This config instantiates Lichtheim2Model with the layer sizes from Ueno et al. (2011).
+# It does NOT yet cover faithful weight initialisation, training schedule, or data encoding.
+# Those are later work (Phase 2b / Phase 3).
+#
+# All layer sizes are [Paper] unless otherwise noted.
+
+model:
+  sound_input_size: 21          # primary auditory / pSTG input layer [Paper]
+  motor_output_size: 21         # insular-motor cortex output layer [Paper]
+  iSMG_hidden_size: 50          # inferior supramarginal gyrus, dorsal pathway [Paper]
+  mSTG_hidden_size: 200         # middle STG/STS, ventral pathway [Paper]
+  aSTG_hidden_size: 650         # anterior STG/STS, ventral pathway [Paper]
+  triangularis_hidden_size: 200 # triangularis-opercularis, ventral output side [Paper]
+  vATL_size: 50                 # ventrolateral anterior temporal lobe, semantic [Paper]
+
+tasks:
+  repetition_ticks: 6           # [Paper] 3 input (morae) + 3 output (morae)
+  comprehension_ticks: 3        # [Paper] 3 input ticks; semantic evaluated at tick 3
+  speaking_ticks: 3             # [Paper] semantic input clamped; motor output at each tick
+
+# ---------------------------------------------------------------------------
+# Metadata: reference values from Ueno et al. (2011) for documentation only.
+# These fields are NOT read by load_config() or ModelConfig in Phase 2a.
+# They document the faithful data encoding to be implemented in Phase 3.
+# ---------------------------------------------------------------------------
+metadata:
+  phonological_bits: 21     # [Supp] 15 consonant features + 5 vowel features + 1 pitch-accent
+  semantic_bits: 50         # [Paper] 50-bit prototype-based artificial semantic vectors
+  vocab_size: 1710          # [Paper] 855 high-frequency + 855 low-frequency Japanese nouns
+  mora_count_per_word: 3    # [Paper] all training words are tri-mora
