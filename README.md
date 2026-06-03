@@ -102,9 +102,13 @@ conda activate lichtheim2
 pip install pytest pyyaml ruff black
 ```
 
-PyTorch and NumPy will be added as implementation dependencies in Phase 1.
+For Phase 1 toy dynamics, PyTorch is required (dependency list is not final):
 
-To run the (placeholder) test suite:
+```bash
+pip install torch pytest pyyaml
+```
+
+To run the test suite:
 
 ```bash
 python -m pytest tests/ -v
