@@ -97,10 +97,10 @@ def run_trial(
 Each connection between layer A and layer B is a single `nn.Linear`. Sizes below are the faithful (Phase 2) values; Phase 1 uses toy sizes from `configs/toy.yaml` via `ModelConfig`:
 
 ```python
-self.sound_to_iSMG      = nn.Linear(21, 50, bias=True)   # [Inferred: bias present]
+self.sound_to_iSMG      = nn.Linear(21, 50, bias=True)   # carries iSMG bias [Inferred]
 self.iSMG_elman         = nn.Linear(50, 50, bias=False)   # Elman; no bias [Paper]
 self.motor_copy_to_iSMG = nn.Linear(21, 50, bias=False)   # copy;  no bias [Paper]
-self.iSMG_to_motor      = nn.Linear(50, 21, bias=True)
+self.iSMG_to_motor      = nn.Linear(50, 21, bias=True)    # carries motor bias [Inferred]
 # ... etc.
 ```
 
@@ -109,6 +109,18 @@ This makes it trivial to zero out a specific pathway for lesioning:
 ```python
 model.iSMG_to_motor.weight.data.zero_()  # lesion dorsal output
 ```
+
+### Weight Initialisation (Phase 2b)
+
+Implemented in `Lichtheim2Model._init_weights()`, called at the end of `__init__`:
+
+| Connection group | Range | Source |
+|-----------------|-------|--------|
+| Standard feedforward weights | uniform [−1, 1] | `[Paper]` |
+| Elman weights (`iSMG_elman`) | uniform [−0.5, 0.5] | `[Paper]` |
+| Copy-back/context weights (`motor_copy_to_iSMG`, `vATL_in_to_aSTG`) | uniform [−0.5, 0.5] | `[Inferred]` — paper says "recurrent connections" but does not explicitly define whether copy-back connections qualify |
+| Additive bias (`nn.Linear.bias`) | constant −1.0 | `[Inferred]` — PyTorch approximation of the LENS bias-link convention; the paper states LENS bias-link weights suppress early activation, but the mapping to `nn.Linear.bias` is an implementation assumption |
+| Copy and Elman layers | no bias (`bias=False`) | `[Paper]` |
 
 ---
 

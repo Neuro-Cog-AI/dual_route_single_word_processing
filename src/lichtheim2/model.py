@@ -53,6 +53,46 @@ class Lichtheim2Model(nn.Module):
         self.aSTG_to_triangularis = nn.Linear(a,  t,  bias=True)
         self.triangularis_to_motor = nn.Linear(t, mo, bias=False)  # motor bias in iSMG_to_motor
 
+        self._init_weights()
+
+    def _init_weights(self) -> None:
+        """Apply faithful weight initialisation from Ueno et al. (2011).
+
+        Standard feedforward weights: uniform [−1, 1] [Paper]
+        Elman weights:                uniform [−0.5, 0.5] [Paper]
+        Copy-back/context weights:    uniform [−0.5, 0.5] [Inferred — paper says
+            "recurrent connections" but does not explicitly define which connections
+            qualify beyond the Elman; treating copy-back as recurrent is an assumption]
+        Additive bias (nn.Linear.bias): set to −1.0 [Inferred — PyTorch approximation
+            of the LENS bias-link convention; the paper states LENS bias links suppress
+            early activation, but the translation to nn.Linear.bias is our assumption]
+        Copy and Elman layers: no bias by construction [Paper]
+        """
+        # Standard feedforward weights: [−1, 1]
+        for module in (
+            self.sound_to_iSMG,
+            self.iSMG_to_motor,
+            self.sound_to_mSTG,
+            self.mSTG_to_aSTG,
+            self.aSTG_to_vATL,
+            self.aSTG_to_triangularis,
+            self.triangularis_to_motor,
+        ):
+            nn.init.uniform_(module.weight, -1.0, 1.0)
+            if module.bias is not None:
+                nn.init.constant_(module.bias, -1.0)
+
+        # Elman and copy-back/context weights: [−0.5, 0.5]
+        # iSMG_elman is Elman [Paper]; motor_copy_to_iSMG and vATL_in_to_aSTG
+        # are treated as recurrent by assumption [Inferred].
+        for module in (
+            self.iSMG_elman,
+            self.motor_copy_to_iSMG,
+            self.vATL_in_to_aSTG,
+        ):
+            nn.init.uniform_(module.weight, -0.5, 0.5)
+            # bias=False on all three by construction; nothing to set
+
     def forward_tick(
         self,
         state: ModelState,
