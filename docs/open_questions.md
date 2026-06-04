@@ -13,28 +13,28 @@ Unresolved design decisions for the Lichtheim 2 PyTorch reimplementation, ordere
 
 ### D1. Japanese vs English for the first replication
 
-**Question:** Should the first faithful replication use a Japanese mora-based phonological setup (21-bit vectors, fixed 3-unit sequences) or move directly to an English phonological representation?
+**Question:** Should the first replication use a Japanese mora-based phonological setup or move directly to an English phonological representation?
 
-**Why it matters:** Choosing English from the start requires additional encoding decisions (variable-length sequences, phoneme inventory, feature system) that are not specified in the paper. Choosing Japanese is safer for faithfulness and closer to the original, but the NTT vocabulary database is not publicly available.
+**Why it matters:** This determines the vocabulary, phonological encoding, and evaluation metric.
 
 **Options:**
-- (a) Japanese-like: random 21-bit vectors following the supplement's feature structure, synthetic vocabulary — no real NTT data required
-- (b) English from the start: controlled CVC vocabulary with an articulatory feature set, fixed 3-segment sequences
+- (a) Japanese-like: 21-bit mora vectors, NTT tri-mora vocabulary, Figure 2 replication target
+- (b) English: ARPAbet phoneme sequences, NWR-style data, variable-length
 
-**Status:** `Open`
+**Status:** `Resolved` — **English/NWR direction.** Local CSV data available (phonemes.csv, ssp.csv, wfe.csv); not committed to the public repo. The Japanese tri-mora setup remains a historical reference and a possible future comparison point.
 
 ---
 
 ### D2. Success criterion for Phase 3
 
-**Question:** What is the minimum result that constitutes a successful faithful replication?
+**Question:** What is the minimum successful English/NWR training result?
 
 **Why it matters:** Determines the scope of Phase 3 and whether lesioning infrastructure should be built during Phase 3 or deferred to Phase 4.
 
 **Options:**
-- (a) Figure 2 learning curves only (repetition, comprehension, speaking/naming)
-- (b) Figure 2 plus at least two key aphasic profiles from Figure 3
-- (c) Full lesion synthesis (all panels of Figure 3)
+- (a) Learns repetition on real words and pseudowords
+- (b) Learns repetition plus comprehension/speaking for real words
+- (c) Shows interpretable effects of lexicality, frequency, and/or length
 
 **Status:** `Open`
 
@@ -100,16 +100,16 @@ Unresolved design decisions for the Lichtheim 2 PyTorch reimplementation, ordere
 
 ## Training (Phase 2–3)
 
-### D7. Required numerical faithfulness
+### D7. Qualitative vs numerical training criterion
 
-**Question:** How closely must the PyTorch implementation match the original LENS outputs quantitatively?
+**Question:** Should the training evaluation criterion be qualitative (correct ordering of skill acquisition) or more precisely numerical (specific accuracy thresholds or learning targets)?
 
-**Why it matters:** LENS and PyTorch may differ in floating-point behaviour, sigmoid implementation, and gradient computation order. Achieving bit-exact equivalence is likely impossible; the question is how close is "close enough."
+**Why it matters:** The original LENS model had a specific Japanese benchmark. For the English/NWR setup there is no direct numerical reference, so "sufficient training" must be defined.
 
 **Options:**
-- (a) Qualitatively faithful: correct ordering of acquisition curves (repetition first, then comprehension, then speaking), correct aphasic profiles
-- (b) Numerically close: epoch counts and accuracy levels within ~10% of Figure 2
-- (c) Maximally faithful: minimise any deviation from LENS; justify every deviation explicitly
+- (a) Qualitative: correct ordering of skill acquisition (repetition before comprehension, comprehension before speaking/naming); interpretable lexicality/frequency/length effects
+- (b) Numerical: predefined accuracy thresholds on held-out sets for real words and pseudowords
+- (c) Comparison to published NWR human data where available
 
 **Status:** `Open`
 
@@ -145,25 +145,99 @@ Unresolved design decisions for the Lichtheim 2 PyTorch reimplementation, ordere
 
 ---
 
-## English Adaptation (Phase 6 only)
+## English / NWR-Style Training (Current Direction)
 
-The following questions are deferred until Phase 3 is confirmed faithful. They are listed here to avoid losing them.
+### D10. Fixed vs variable-length phonological sequences
 
-### D10. Fixed vs variable-length phonological sequences for English
+**Question:** Should the model use fixed-length sequences (as in the original 3-mora setup) or variable-length sequences?
 
-**Question:** Should the English adaptation preserve fixed-length 3-segment sequences, or use variable-length representations?
+**Why it matters:** Variable-length requires changes to `build_trial_inputs` and tick counting; affects padding/masking/EOS strategy for training.
 
-**Status:** `Open` — Phase 6
+**Options:**
+- (a) Fixed-length with padding to max length
+- (b) Variable-length with EOS token
+- (c) Unbatched variable-length (Phase 2c target — no padding/masking/EOS yet)
+
+**Status:** `Current direction` — variable-length sequences; Phase 2c implements unbatched support first.
 
 ---
 
-### D11. English vocabulary selection
+### D11. English vocabulary
 
-**Question:** What English vocabulary should be used for Phase 6?
+**Question:** What English vocabulary should be used for training?
 
-**Options:** CVC-only controlled set; SWP word norms; CMU Pronouncing Dictionary subset matched to the original Japanese vocabulary size and frequency distribution.
+**Options:** Local wfe.csv (real words with frequency/lexicality metadata); local ssp.csv (pseudowords/nonwords); CMU Pronouncing Dictionary subset.
 
-**Status:** `Open` — Phase 6
+**Status:** `Provisional` — local wfe.csv and ssp.csv are available but **not committed** to this public repository (raw data → data/raw/, gitignored). Encoding pipeline to be designed in Phase 2c / Phase 3.
+
+---
+
+### D12. Padding/masking/EOS strategy for variable-length sequences
+
+**Question:** For training with variable-length sequences, how should the model handle sequences of different lengths within or across batches?
+
+**Options:**
+- Zero-pad to max length; mask loss beyond actual sequence length
+- EOS token; generate until EOS produced
+- Unbatched training (no padding needed; straightforward but slow)
+
+**Why it matters:** Determines how to implement the training loop and how to score variable-length output.
+
+**Status:** `Open` — Phase 2c implements unbatched trials only; this question is deferred until training begins.
+
+---
+
+### D13. Repetition tick structure for variable-length sequences
+
+**Question:** For a word of length T phonemes, is the repetition trial always T input ticks + T output ticks?
+
+**Why it matters:** The original model uses 3 input + 3 output = 6 ticks for 3-mora words. The generalisation to T + T seems natural, but needs confirmation.
+
+**Status:** `Provisional` — treating T + T as the tick structure for Phase 2c.
+
+---
+
+### D14. English phoneme feature representation
+
+**Question:** What feature set should be used to represent English phonemes? What dimension is `sound_input_size` in the English config?
+
+**Options:**
+- Phoneme one-hot (one dimension per phoneme)
+- Hand-designed binary feature vectors (e.g., place, manner, voicing)
+- One-hot-expanded categorical features from phonemes.csv
+- Another ARPAbet feature encoding
+
+**Why it matters:** The features in local phonemes.csv are categorical; the encoding choice determines `sound_input_size`. This is not yet decided.
+
+**Status:** `Open` — phoneme feature dimension is not assumed; to be decided before Phase 2c config is finalised.
+
+---
+
+### D15. Semantic representation for English
+
+**Question:** Should English words use the same artificial prototype-based semantic vectors as the original model, or a distributional/embedding representation?
+
+**Status:** `Provisional` — keep artificial vectors for Phase 3; revisit later.
+
+---
+
+### D16. Lexicality and frequency in training
+
+**Question:** How should real words and pseudowords be presented differently in training? Should word frequency affect presentation rate?
+
+**Why it matters:** The original model used log-frequency scaling of error derivatives. The English/NWR setup should decide whether to replicate this or use a different schedule.
+
+**Status:** `Open`
+
+---
+
+### D17. Pseudowords in comprehension and speaking
+
+**Question:** Should pseudowords be used only for repetition/generalization testing (as in the NWR spirit), or should they also receive artificial semantic vectors for comprehension and speaking/naming experiments?
+
+**Why it matters:** If pseudowords are used for repetition only, they require no semantic representation. If they are also used in comprehension/speaking, they need an assigned or randomly generated semantic vector, which has implications for what the model learns.
+
+**Status:** `Open`
 
 ---
 
@@ -173,6 +247,7 @@ These items were open at project start but are now confirmed from the paper or s
 
 | Item | Decision | Source |
 |------|----------|--------|
+| Training/data direction | English/NWR-style, variable-length sequences | Project guidance |
 | Loss function | Cross-entropy | `[Paper]` |
 | Zero-error radius | 0.1 (no gradient if \|output − target\| < 0.1) | `[Paper]` |
 | Learning rate schedule | 0.5 until epoch 150; −0.1 per 10 epochs until epoch 180; fixed 0.1 until epoch 200 | `[Paper]` |

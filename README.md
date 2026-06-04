@@ -14,17 +14,19 @@ The Lichtheim 2 model is a neurocomputational account of the dual dorsal-ventral
 
 The goal of this repository is:
 
-1. **Phase 1–3:** A faithful, tick-by-tick PyTorch reimplementation of the original model, validated against Figure 2 of Ueno et al. (2011).
+1. **Phase 1–3:** A PyTorch implementation of the Lichtheim 2 dual-route architecture trained on English/NWR-style data with variable-length phoneme sequences.
 2. **Phase 4–5:** Lesioning, recovery, and representational similarity analyses.
-3. **Phase 6 (future):** English adaptation and SWP-inspired extension — *only after the faithful replication is confirmed*.
+3. **Phase 6 (future):** Further extensions — cross-linguistic comparisons and additional analyses.
 
 This is **not** a modern seq2seq model, not a Transformer, and not an audio-processing system. The architecture is a hand-rolled Elman-style recurrent network with explicit tick-by-tick dynamics and copy-back feedback, closely following the original LENS implementation.
 
 ---
 
-## Faithful Replication First
+## Architectural Reference
 
-The immediate priority is correctness with respect to the original paper and its supplementary materials, not generality or modern conventions.
+**Lichtheim 2 (Ueno et al. 2011) is the architectural and methodological reference for this project.** The dual-route structure, explicit tick-by-tick dynamics, copy-back connections, and task definitions (repetition, comprehension, speaking/naming) are all taken directly from the paper and its supplement.
+
+The current training and data direction targets **English/NWR-style data** with variable-length phoneme sequences, not a reconstruction of the original Japanese tri-mora setup. The original Japanese setup remains a historical reference and may serve as a future comparison point.
 
 Decisions are tagged throughout the documentation:
 
@@ -32,8 +34,6 @@ Decisions are tagged throughout the documentation:
 - `[Supp §X]` — stated in the supplementary materials
 - `[Inferred]` — our best-effort inference for a PyTorch reimplementation
 - `[Open]` — unclear; unresolved design decision (see [docs/open_questions.md](docs/open_questions.md))
-
-No claim of faithfulness will be made until the architecture and training dynamics have been validated against the paper.
 
 ---
 
@@ -46,10 +46,10 @@ See [docs/roadmap.md](docs/roadmap.md) for the full phased plan.
 | 0 | Repo scaffold and specification | Complete |
 | 1 | Toy tick-by-tick forward pass | Complete |
 | 2 | Faithful architecture (all layers, all paths) | In progress (Phase 2a) |
-| 3 | Training and Figure 2-like learning curves | Pending |
+| 3 | English/NWR-style training | Pending |
 | 4 | Lesioning and recovery | Pending |
 | 5 | Representational similarity analyses | Pending |
-| 6 | English adaptation / SWP extension | Pending — after Phase 3 confirmed |
+| 6 | Further extensions (cross-linguistic comparisons, deeper analyses) | Pending |
 
 ---
 

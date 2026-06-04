@@ -4,6 +4,8 @@ Phased plan for the Lichtheim 2 PyTorch reimplementation.
 
 **Rule:** No phase may begin until the success criterion of the previous phase has been reviewed and confirmed.
 
+**Direction:** Lichtheim 2 (Ueno et al. 2011) is the architectural reference. The current training and data direction targets English/NWR-style data with variable-length phoneme sequences. The original Japanese tri-mora setup is a historical reference, not the primary training target.
+
 ---
 
 ## Phase 0 — Repo Scaffold and Specification — **Complete**
@@ -62,21 +64,36 @@ Phase 2 is split into sub-steps:
 
 **Success criterion:** All weight tensors and bias values match the implemented conventions; connectivity audit confirms all 10 connections from Supplement Figure S1 are present; existing toy and faithful tests still pass.
 
+### Phase 2c — Unbatched Variable-Length Trial Support — **Pending**
+
+**Goal:** Extend `build_trial_inputs` and `run_trial` to handle phoneme sequences of arbitrary length T. No padding, masking, EOS, or batching yet. No training.
+
+Tick structure:
+- Repetition: T input ticks + T output ticks (2T total)
+- Comprehension: T input ticks; semantic output evaluated at tick T
+- Speaking/naming: T output ticks with semantic input clamped
+
+**Deliverables:**
+- Updated `src/lichtheim2/tasks.py`: variable-length trial construction
+- New config for English phoneme feature size (TBD — see D14 in `docs/open_questions.md`)
+- `tests/test_variable_length.py`: trials with T=2, 3, 5; existing tests unaffected
+
+**Success criterion:** Model runs unbatched forward trials for T=2, 3, 5; all activations remain in [0, 1]; all existing toy and faithful tests still pass. Padding, masking, EOS, and batching remain `[Open]`.
+
 ---
 
-## Phase 3 — Training and Figure 2-Like Learning Curves
+## Phase 3 — Training on English/NWR-Style Data
 
-**Goal:** Implement the online training loop and reproduce the learning curve from Figure 2 of Ueno et al. (2011).
+**Goal:** Implement the online training loop using English/NWR-style data (real words and pseudowords, variable-length ARPAbet phoneme sequences).
 
 **Deliverables:**
 - `src/lichtheim2/training.py`: online item-by-item update loop
 - `src/lichtheim2/data.py`: synthetic phonological/semantic vocabulary generator
 - Training schedule: 1× repetition, 2× speaking, 3× comprehension per word per epoch `[Paper/Supp]`
 - Logging of per-task accuracy over epochs
-- `scripts/train_faithful.py`: training entry point
-- Figure 2-like learning curve plot
+- `scripts/train_english_nwr.py`: training entry point
 
-**Success criterion:** Model reproduces the qualitative learning profile reported in Figure 2: repetition develops first, followed by comprehension, then speaking/naming, with appropriate frequency effects. To be reviewed before moving to Phase 4.
+**Success criterion:** The model learns the intended English/NWR-style tasks with interpretable learning curves and appropriate effects of lexicality, frequency, and length where applicable. To be reviewed before moving to Phase 4.
 
 ---
 
@@ -106,16 +123,8 @@ Phase 2 is split into sub-steps:
 
 ---
 
-## Phase 6 — English Adaptation / SWP-Inspired Extension
+## Phase 6 — Further Extensions
 
-**Goal:** Adapt the model to English phonology and/or a richer semantic representation. Begins only after Phase 3 is confirmed faithful.
+**Goal:** Cross-linguistic comparisons, deeper representational analyses, or adaptations beyond the current English/NWR setup. Scope to be defined after Phase 3 is confirmed.
 
-**Open questions before starting:**
-- Fixed-length vs. variable-length phonological sequences
-- Articulatory vs. phonemic feature representation
-- Distributional vs. artificial semantic vectors
-- Whether to use SWP word norms or a curated English vocabulary
-
-See [docs/open_questions.md](open_questions.md) for the full list.
-
-**Success criterion:** TBD after Phase 3 is confirmed.
+**Success criterion:** TBD.

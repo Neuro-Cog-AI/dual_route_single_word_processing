@@ -48,25 +48,42 @@ The vocabulary construction procedure (how many words, how phonological overlap 
 
 ---
 
-## English Adaptation (Phase 6 — Future Work)
+## English / NWR-Style Data — Current Direction
 
-**Do not implement until Phase 3 is confirmed faithful.**
+The current training and data direction targets English phoneme sequences, NWR-style, with variable-length words. The Lichtheim 2 task structure (repetition, comprehension, speaking/naming) is preserved.
 
-Candidate options for English phonological encoding:
+### Available Local Data (not committed to this repository)
 
-| Option | Pros | Cons |
-|--------|------|------|
-| CVC words with articulatory features | Clean, controlled; close to original structure | Artificial; limited vocabulary |
-| IPA phoneme features (e.g., Chomsky-Halle) | Linguistically grounded | Variable-length words; requires alignment |
-| Fixed-length 3-segment sequences | Preserves tick structure | Restricts vocabulary to monosyllables |
-| CMU Pronouncing Dictionary | Real English words | Variable length; needs padding strategy |
+Three CSV files are available locally and inform encoding design decisions. They are **not committed** to this public repository. Raw data belongs in `data/raw/` (gitignored).
 
-All options require choosing:
-- A feature set for each phoneme/segment
-- A strategy for handling variable-length words (padding, truncation, or length normalisation)
-- A vocabulary size and sampling strategy
+| File | Contents |
+|------|----------|
+| `phonemes.csv` | Phoneme inventory with categorical phonetic features (ARPAbet-like entries) |
+| `ssp.csv` | Pseudoword/nonword phoneme sequences with sonority profile, sequence type, and length metadata |
+| `wfe.csv` | Word-level items with lexicality, morphology, frequency, length, and phoneme sequence metadata |
 
-These decisions are deferred to Phase 6 and should be made with Yair. See [docs/open_questions.md](open_questions.md) Q13–Q14.
+### Phoneme Feature Representation (`[Open]` — D14)
+
+The features in `phonemes.csv` are categorical. The encoding choice determines `sound_input_size` in the English config. **Do not assume a feature dimension until this decision is made.** Candidate approaches:
+
+| Option | Notes |
+|--------|-------|
+| Phoneme one-hot | One dimension per phoneme; size = phoneme inventory |
+| Hand-designed binary features | Place, manner, voicing, etc.; linguistically motivated |
+| One-hot-expanded categorical features from phonemes.csv | Preserves categorical structure; size depends on feature count |
+| Other ARPAbet feature encoding | TBD |
+
+See D14 in [docs/open_questions.md](open_questions.md).
+
+### Variable-Length Encoding (Phase 2c)
+
+Unlike the original 3-mora Japanese setup, English words vary in phoneme count. Phase 2c implements **unbatched variable-length trial support**:
+
+- Repetition: T input ticks + T output ticks (2T total)
+- Comprehension: T input ticks; semantic output evaluated at tick T
+- Speaking/naming: T output ticks with semantic input clamped
+
+Padding, masking, EOS, and batching are design decisions deferred to a later phase. See D12 in [docs/open_questions.md](open_questions.md).
 
 ---
 
@@ -78,4 +95,4 @@ For Phase 1 (toy tick-dynamics validation) only, all phonological and semantic v
 - Assign each word a unique phonological pattern and a unique semantic pattern
 - No linguistic structure required — purely for testing forward-pass mechanics
 
-**Phase 2 onward:** the faithful 21-bit phonological representation from the Supplement Table must be used. Random vectors are not acceptable for the faithful replication.
+**Phase 2 onward (architecture testing):** the faithful 21-bit phonological representation from the Supplement Table is used for architecture validation with the faithful config. For English/NWR training (Phase 3+), the phoneme feature encoding from the English config will be used instead — see the English/NWR section above.
