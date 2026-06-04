@@ -95,16 +95,16 @@ Phase 3 is split into sub-steps:
 
 **Success criterion:** Encoding plan documented; coverage validation requirement identified; phoneme feature dimension open but candidate options listed.
 
-### Phase 3b — English Phoneme Encoder and Data Loader — **Pending**
+### Phase 3b — English Phoneme Encoder — **In Progress**
 
-**Goal:** Implement a minimal data pipeline: phoneme inventory from `phonemes.csv`, one-hot encoder, word-item loader from `wfe.csv` and `ssp.csv`. No training. Validate that all No_Stress phonemes in the word lists are covered by the inventory.
+**Goal:** Implement a minimal phoneme inventory loader and one-hot encoder. Validate that all No_Stress phonemes in wfe.csv and ssp.csv are covered by the inventory. No training, no full data loader yet.
 
 **Deliverables:**
-- `src/lichtheim2/data.py`: `load_phoneme_inventory()`, `PhonemeEncoder`, `load_word_items()`, `load_pseudowords()`
-- `configs/english_nwr.yaml`: English config with `sound_input_size` set to inventory size (after coverage check)
-- `tests/test_data_encoding.py`: inventory coverage, one-hot encoding, No_Stress parsing
+- `src/lichtheim2/encoding.py`: `PhonemeInventory`, `load_phoneme_inventory()`, `parse_phoneme_sequence()`, `validate_phoneme_coverage()`, `encode_phoneme_sequence()`
+- `configs/english_nwr.yaml`: English/NWR config with provisional `sound_input_size: 40` (pending coverage validation)
+- `tests/test_english_phoneme_encoder.py`: always-run mock tests + CSV-dependent coverage, length, encoding, and integration tests; skipped gracefully if CSVs absent
 
-**Success criterion:** Inventory loads; every phoneme in wfe.csv and ssp.csv is covered; one-hot encoding produces correct tensors; existing tests unaffected.
+**Success criterion:** All No_Stress phonemes in wfe.csv and ssp.csv are confirmed in the inventory; No_Stress sequence lengths match the Length column; one-hot encoding produces correct `(T, N)` tensors; encoded wfe.csv items run through `run_trial()` for all three tasks; existing tests unaffected.
 
 ### Phase 3c — Training Loop — **Pending**
 

@@ -1,0 +1,39 @@
+# English/NWR-style configuration — Phase 3b
+#
+# PROVISIONAL: sound_input_size and motor_output_size equal the current local
+# phoneme inventory size (39 symbols from phonemes.csv at time of inspection).
+# This value must be confirmed by coverage validation (D18 in
+# docs/open_questions.md) before training. If wfe.csv or ssp.csv contain
+# symbols not in the inventory, the size will need to be revised.
+#
+# See also docs/open_questions.md D14 (encoding options) and D18 (coverage).
+
+model:
+  sound_input_size: 39          # one-hot over phoneme inventory — PROVISIONAL
+                                # Current local phonemes.csv has 39 symbols.
+                                # Confirm by running test_wfe_coverage and test_ssp_coverage.
+  motor_output_size: 39         # same encoding for input and output [Paper rationale]
+  iSMG_hidden_size: 50          # [Paper]
+  mSTG_hidden_size: 200         # [Paper]
+  aSTG_hidden_size: 650         # [Paper]
+  triangularis_hidden_size: 200 # [Paper]
+  vATL_size: 50                 # [Paper]
+
+# Legacy/reference tick counts required by ModelConfig.
+# These values are from the original Japanese fixed-length setup and are
+# stored by ModelConfig but NOT used at runtime for variable-length sequences.
+# Runtime trial length is always inferred from phon_pattern.shape[0].
+tasks:
+  repetition_ticks: 6    # original: T_input + T_output for 3-mora words
+  comprehension_ticks: 3 # original: 3 input ticks
+  speaking_ticks: 3      # original: 3 output ticks
+
+metadata:
+  encoding: one_hot_phoneme
+  inventory_source: data/raw/nwr_swp/phonemes.csv
+  sequence_field: No_Stress
+  inventory_size_note: >
+    sound_input_size = 39 is provisional. It reflects the phoneme inventory
+    size from the current local phonemes.csv (39 symbols). Run
+    test_wfe_coverage and test_ssp_coverage before training to confirm all
+    No_Stress symbols are covered and no out-of-vocabulary symbols exist.
