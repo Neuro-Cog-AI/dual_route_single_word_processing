@@ -62,6 +62,23 @@ Phase 2 is split into sub-steps:
 
 **Success criterion:** All weight tensors and bias values match the implemented conventions; connectivity audit confirms all 10 connections from Supplement Figure S1 are present; existing toy and faithful tests still pass.
 
+### Phase 2c — Unbatched Variable-Length Trial Support — **In Progress**
+
+**Goal:** Extend `build_trial_inputs` and `run_trial` to handle phoneme sequences of arbitrary length T. No padding, masking, EOS, batching, or real data loading. No training.
+
+Tick structure:
+- Repetition: T input ticks + T output ticks (2T total)
+- Comprehension: T input ticks; semantic output evaluated at tick T
+- Speaking/naming: T output ticks with semantic input clamped; `phon_pattern` is still required to determine T
+
+Note: `cfg.repetition_ticks`, `cfg.comprehension_ticks`, and `cfg.speaking_ticks` are now historical reference values for the original fixed-length setup. Runtime tick counts are derived from `phon_pattern.shape[0]`.
+
+**Deliverables:**
+- Updated `src/lichtheim2/tasks.py`: T inferred from `phon_pattern.shape[0]`; 1-D input treated as T=1
+- `tests/test_variable_length_trials.py`: tests for T=1, 2, 3, 5 including 1-D fallback
+
+**Success criterion:** Model runs unbatched forward trials for T=1, 2, 3, 5; tick counts correct (2T / T / T); activations in [0, 1]; all existing toy and faithful tests unaffected. Padding, masking, EOS, and batching remain `[Open]`.
+
 ---
 
 ## Phase 3 — Training and Figure 2-Like Learning Curves
