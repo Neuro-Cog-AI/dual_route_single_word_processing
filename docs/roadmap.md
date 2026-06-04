@@ -95,16 +95,18 @@ Phase 3 is split into sub-steps:
 
 **Success criterion:** Encoding plan documented; coverage validation requirement identified; phoneme feature dimension open but candidate options listed.
 
-### Phase 3b — English Phoneme Encoder — **In Progress**
+### Phase 3b — English Phoneme Encoder and Word Item Loaders — **In Progress**
 
-**Goal:** Implement a minimal phoneme inventory loader and one-hot encoder. Validate that all No_Stress phonemes in wfe.csv and ssp.csv are covered by the inventory. No training, no full data loader yet.
+**Goal:** Implement a minimal phoneme inventory loader, one-hot encoder, and word/pseudoword item loaders. Validate that all No_Stress phonemes are covered and that encoded items can be passed through `run_trial()`. No training, no semantic vectors, no batching.
 
 **Deliverables:**
 - `src/lichtheim2/encoding.py`: `PhonemeInventory`, `load_phoneme_inventory()`, `parse_phoneme_sequence()`, `validate_phoneme_coverage()`, `encode_phoneme_sequence()`
-- `configs/english_nwr.yaml`: English/NWR config with provisional `sound_input_size: 40` (pending coverage validation)
-- `tests/test_english_phoneme_encoder.py`: always-run mock tests + CSV-dependent coverage, length, encoding, and integration tests; skipped gracefully if CSVs absent
+- `src/lichtheim2/data.py`: `WordItem`, `PseudowordItem` dataclasses; `load_word_items()`; `load_pseudoword_items()`; required-field validation; Length consistency check
+- `configs/english_nwr.yaml`: English/NWR config with provisional `sound_input_size: 39`
+- `tests/test_english_phoneme_encoder.py`: always-run + CSV-dependent encoder tests
+- `tests/test_english_word_items.py`: always-run mock-CSV tests + CSV-dependent loader tests; integration with `run_trial()` for REPETITION
 
-**Success criterion:** All No_Stress phonemes in wfe.csv and ssp.csv are confirmed in the inventory; No_Stress sequence lengths match the Length column; one-hot encoding produces correct `(T, N)` tensors; encoded wfe.csv items run through `run_trial()` for all three tasks; existing tests unaffected.
+**Success criterion:** All No_Stress phonemes covered; lengths validated; `WordItem` and `PseudowordItem` load with correct tensor shapes; required-field errors are explicit; encoded items run through REPETITION `run_trial()`; existing tests unaffected.
 
 ### Phase 3c — Training Loop — **Pending**
 
