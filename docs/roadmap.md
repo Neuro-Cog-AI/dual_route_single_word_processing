@@ -81,19 +81,41 @@ Note: `cfg.repetition_ticks`, `cfg.comprehension_ticks`, and `cfg.speaking_ticks
 
 ---
 
-## Phase 3 — Training and Figure 2-Like Learning Curves
+## Phase 3 — English/NWR-Style Training
 
-**Goal:** Implement the online training loop and reproduce the learning curve from Figure 2 of Ueno et al. (2011).
+Phase 3 is split into sub-steps:
+
+### Phase 3a — Data Inspection — **Complete**
+
+**Goal:** Inspect local CSV files (`phonemes.csv`, `wfe.csv`, `ssp.csv`) and document schemas, encoding options, and open questions. No data loading or training.
+
+**Deliverables:**
+- Updated `docs/data_encoding_notes.md`: CSV schemas, No_Stress recommendation, encoding options
+- Updated `docs/open_questions.md`: D10–D18 covering encoding, coverage validation, pseudowords
+
+**Success criterion:** Encoding plan documented; coverage validation requirement identified; phoneme feature dimension open but candidate options listed.
+
+### Phase 3b — English Phoneme Encoder and Data Loader — **Pending**
+
+**Goal:** Implement a minimal data pipeline: phoneme inventory from `phonemes.csv`, one-hot encoder, word-item loader from `wfe.csv` and `ssp.csv`. No training. Validate that all No_Stress phonemes in the word lists are covered by the inventory.
+
+**Deliverables:**
+- `src/lichtheim2/data.py`: `load_phoneme_inventory()`, `PhonemeEncoder`, `load_word_items()`, `load_pseudowords()`
+- `configs/english_nwr.yaml`: English config with `sound_input_size` set to inventory size (after coverage check)
+- `tests/test_data_encoding.py`: inventory coverage, one-hot encoding, No_Stress parsing
+
+**Success criterion:** Inventory loads; every phoneme in wfe.csv and ssp.csv is covered; one-hot encoding produces correct tensors; existing tests unaffected.
+
+### Phase 3c — Training Loop — **Pending**
+
+**Goal:** Implement the online training loop using English/NWR-style data (real words from wfe.csv, pseudowords from ssp.csv for repetition/generalization).
 
 **Deliverables:**
 - `src/lichtheim2/training.py`: online item-by-item update loop
-- `src/lichtheim2/data.py`: synthetic phonological/semantic vocabulary generator
-- Training schedule: 1× repetition, 2× speaking, 3× comprehension per word per epoch `[Paper/Supp]`
+- `scripts/train_english_nwr.py`: training entry point
 - Logging of per-task accuracy over epochs
-- `scripts/train_faithful.py`: training entry point
-- Figure 2-like learning curve plot
 
-**Success criterion:** Model reproduces the qualitative learning profile reported in Figure 2: repetition develops first, followed by comprehension, then speaking/naming, with appropriate frequency effects. To be reviewed before moving to Phase 4.
+**Success criterion:** The model learns the intended English/NWR-style tasks with interpretable learning curves and appropriate effects of lexicality, frequency, and length where applicable. To be reviewed before moving to Phase 4.
 
 ---
 
