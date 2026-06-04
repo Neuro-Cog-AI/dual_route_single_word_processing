@@ -13,15 +13,13 @@ Unresolved design decisions for the Lichtheim 2 PyTorch reimplementation, ordere
 
 ### D1. Japanese vs English for the first replication
 
-**Question:** Should the first faithful replication use a Japanese mora-based phonological setup (21-bit vectors, fixed 3-unit sequences) or move directly to an English phonological representation?
-
-**Why it matters:** Choosing English from the start requires additional encoding decisions (variable-length sequences, phoneme inventory, feature system) that are not specified in the paper. Choosing Japanese is safer for faithfulness and closer to the original, but the NTT vocabulary database is not publicly available.
+**Question:** Should the first replication use a Japanese mora-based phonological setup or English phonological representations?
 
 **Options:**
-- (a) Japanese-like: random 21-bit vectors following the supplement's feature structure, synthetic vocabulary — no real NTT data required
-- (b) English from the start: controlled CVC vocabulary with an articulatory feature set, fixed 3-segment sequences
+- (a) Japanese-like: 21-bit mora vectors, NTT tri-mora vocabulary — closer to original but NTT data is not publicly available
+- (b) English: ARPAbet phoneme sequences, NWR-style data, variable-length
 
-**Status:** `Open`
+**Status:** `Resolved` — **English/NWR direction** (project guidance). The original Japanese tri-mora setup remains a historical and architectural reference; it is not the primary training target. Local CSV data (phonemes.csv, wfe.csv, ssp.csv) is available but not committed to the public repo.
 
 ---
 
@@ -145,25 +143,99 @@ Unresolved design decisions for the Lichtheim 2 PyTorch reimplementation, ordere
 
 ---
 
-## English Adaptation (Phase 6 only)
+## English / NWR-Style Training (Current Direction)
 
-The following questions are deferred until Phase 3 is confirmed faithful. They are listed here to avoid losing them.
+### D10. Fixed vs variable-length phonological sequences
 
-### D10. Fixed vs variable-length phonological sequences for English
+**Question:** Should the model use fixed-length or variable-length phoneme sequences?
 
-**Question:** Should the English adaptation preserve fixed-length 3-segment sequences, or use variable-length representations?
-
-**Status:** `Open` — Phase 6
+**Status:** `Resolved` — variable-length sequences, current direction. Phase 2c implemented unbatched variable-length trial support. Padding, masking, and EOS remain open for batching/training (see D12).
 
 ---
 
-### D11. English vocabulary selection
+### D11. English vocabulary
 
-**Question:** What English vocabulary should be used for Phase 6?
+**Question:** Which English vocabulary source should be used for training?
 
-**Options:** CVC-only controlled set; SWP word norms; CMU Pronouncing Dictionary subset matched to the original Japanese vocabulary size and frequency distribution.
+**Options:**
+- Local wfe.csv — real words with frequency, POS, lexicality metadata (not committed)
+- Local ssp.csv — pseudowords/nonwords with syllable structure and sonority metadata (not committed)
+- CMU Pronouncing Dictionary or other public sources
 
-**Status:** `Open` — Phase 6
+**Status:** `Provisional` — local wfe.csv (real words) and ssp.csv (pseudowords) are the primary candidates. Both are available locally but not committed to the public repository. Full distribution checks needed before use.
+
+---
+
+### D12. Padding/masking/EOS for batching
+
+**Question:** For training with variable-length sequences across batches, how should sequences of different lengths be handled?
+
+**Options:** zero-padding with loss masking; EOS token; unbatched training only.
+
+**Status:** `Open` — Phase 2c uses unbatched trials only; this question is deferred until training begins.
+
+---
+
+### D13. Repetition tick structure for variable-length sequences
+
+**Question:** For a word of length T phonemes, is repetition always T input + T output = 2T ticks?
+
+**Status:** `Provisional` — treating 2T as the tick structure; implemented in Phase 2c.
+
+---
+
+### D14. English phoneme feature representation
+
+**Question:** What encoding should be used for English phonemes? What is `sound_input_size` in the English/NWR config?
+
+**Options:**
+- (A) Phoneme one-hot — one dimension per phoneme; `sound_input_size` = inventory size (initial inspection suggests ~40, pending coverage validation)
+- (B) Binary feature vectors from phonemes.csv — Type + vowel features (Height, Backness, Diphthong) + consonant features (Place, Manner, Voiced); produces sparse vectors (~17 bits) but linguistically richer
+- (C) One-hot-expanded categorical features — similar to B but with NA category for inapplicable features
+
+**Recommendation:** Option A (one-hot) for the first implementation — simple, auditable, and directly derived from the inventory. Differs from the 21-bit Japanese encoding; the English config will have a different `sound_input_size`.
+
+**Coverage validation required before implementation:** every phoneme in wfe.csv::No_Stress and ssp.csv::No_Stress must appear in phonemes.csv. Any out-of-vocabulary symbol must be resolved first. Do not assume `sound_input_size = 40` is final until this check passes.
+
+**Status:** `Open` — Option A recommended; pending coverage validation and final decision.
+
+---
+
+### D15. Semantic representation for English words
+
+**Question:** Should English words use artificial prototype-based semantic vectors (as in the original) or a real distributional representation?
+
+**Status:** `Provisional` — artificial vectors for Phase 3; revisit later.
+
+---
+
+### D16. Lexicality and frequency in training
+
+**Question:** How should real words and pseudowords be handled differently during training? Should frequency affect presentation rate?
+
+**Why it matters:** The original model used log-frequency scaling. The English/NWR setup should decide whether to replicate this or use a different schedule.
+
+**Status:** `Open`
+
+---
+
+### D17. Pseudowords in comprehension and speaking
+
+**Question:** Should pseudowords be used only for repetition/generalization testing (NWR spirit), or should they also receive artificial semantic vectors for comprehension and speaking/naming?
+
+**Why it matters:** If pseudowords are repetition-only, they require no semantic representation. If used in comprehension/speaking, they need an assigned semantic vector, which changes what the model learns.
+
+**Status:** `Open` — for now, treat pseudowords as repetition/generalization items only, unless a later decision assigns artificial semantic vectors to them.
+
+---
+
+### D18. Phoneme coverage validation (pre-implementation check)
+
+**Question:** Are all phoneme symbols in wfe.csv::No_Stress and ssp.csv::No_Stress covered by the phonemes.csv inventory?
+
+**Why it matters:** If any symbol is missing, the one-hot encoder cannot be built without resolving the gap. Stress-marked forms (AH0, EH1, …) must not be used as inventory keys.
+
+**Status:** `Open` — must be completed before Phase 3b encoding implementation begins.
 
 ---
 
@@ -173,6 +245,7 @@ These items were open at project start but are now confirmed from the paper or s
 
 | Item | Decision | Source |
 |------|----------|--------|
+| Training/data direction | English/NWR-style, variable-length phoneme sequences | Project guidance |
 | Loss function | Cross-entropy | `[Paper]` |
 | Zero-error radius | 0.1 (no gradient if \|output − target\| < 0.1) | `[Paper]` |
 | Learning rate schedule | 0.5 until epoch 150; −0.1 per 10 epochs until epoch 180; fixed 0.1 until epoch 200 | `[Paper]` |
