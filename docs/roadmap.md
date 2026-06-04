@@ -42,7 +42,7 @@ Phased plan for the Lichtheim 2 PyTorch reimplementation.
 
 Phase 2 is split into sub-steps:
 
-### Phase 2a — Architecture Skeleton — **In Progress**
+### Phase 2a — Architecture Skeleton — **Complete**
 
 **Goal:** Instantiate `Lichtheim2Model` with the real Lichtheim 2 layer sizes and validate forward dynamics on dummy tensors. No training, no faithful weight initialisation, no real data.
 
@@ -52,16 +52,15 @@ Phase 2 is split into sub-steps:
 
 **Success criterion:** All three task types run `forward_tick` and `run_trial` with faithful layer sizes; shapes correct; activations in [0, 1].
 
-### Phase 2b — Faithful Weight Initialisation and Connectivity Audit
+### Phase 2b — Faithful Weight Initialisation and Connectivity Audit — **In Progress**
 
-**Goal:** Implement the faithful weight initialisation from the paper and verify all connection biases.
+**Goal:** Implement the weight initialisation scheme from the paper and audit all connection/bias conventions against Supplement Figure S1.
 
 **Deliverables:**
-- Faithful weight init: implement and test the paper/supplement initialisation scheme, including recurrent weight ranges and bias-link conventions
-- `configs/lichtheim2.yaml` may gain a `weight_init:` section
-- Tests for weight ranges and bias values
+- `Lichtheim2Model._init_weights()`: standard weights [−1, 1] `[Paper]`; Elman weights [−0.5, 0.5] `[Paper]`; copy-back weights [−0.5, 0.5] `[Inferred]`; additive bias = −1.0 `[Inferred — PyTorch approximation of LENS bias-link convention]`
+- `tests/test_weight_initialization.py`: tests for weight ranges, bias values, connectivity completeness
 
-**Success criterion:** Weight statistics match paper spec; `[Open]` items from Phase 0 relating to architecture resolved.
+**Success criterion:** All weight tensors and bias values match the implemented conventions; connectivity audit confirms all 10 connections from Supplement Figure S1 are present; existing toy and faithful tests still pass.
 
 ---
 
