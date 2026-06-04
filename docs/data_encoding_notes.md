@@ -58,7 +58,7 @@ Three CSV files exist locally at `data/raw/nwr_swp/`. They are **not committed**
 
 #### phonemes.csv — Phoneme inventory
 
-Initial inspection: 40 phonemes (15 vowels, 25 consonants). Each row is one ARPAbet phoneme symbol with categorical phonetic features.
+Initial inspection: 39 phonemes (the exact vowel/consonant breakdown should be verified from the file). Each row is one ARPAbet phoneme symbol with categorical phonetic features.
 
 | Feature | Vowels (V) | Consonants (C) |
 |---------|-----------|----------------|
@@ -69,7 +69,7 @@ Initial inspection: 40 phonemes (15 vowels, 25 consonants). Each row is one ARPA
 | Manner | — | Stop / Fricative / Nasal / Approximant |
 | Voiced | — | True / False |
 
-Diphthongs (OY, AY, EY, OW, AW) appear as single phoneme entries. The `No_Stress` column stores the lookup key (e.g. `['AH']`) matching the stress-free forms used in wfe.csv and ssp.csv.
+Diphthongs (e.g. OY, AY, EY, OW, AW — see the Diphthong column in phonemes.csv for the complete list) appear as single phoneme entries. The `No_Stress` column stores the lookup key (e.g. `['AH']`) matching the stress-free forms used in wfe.csv and ssp.csv.
 
 #### wfe.csv — Real-word items
 
@@ -106,7 +106,7 @@ The encoding choice determines `sound_input_size` in the English/NWR config. Thi
 
 **Option A — Phoneme one-hot (recommended first implementation)**
 
-One dimension per phoneme in the inventory. If the inventory has N phonemes (initial inspection suggests ~40), then `sound_input_size = N`. Recommended because it is simple, auditable, and requires no feature engineering. The exact size is subject to coverage validation.
+One dimension per phoneme in the inventory. `sound_input_size = N` where N is the inventory size (currently 39 in the local phonemes.csv, provisional — see D18). Recommended because it is simple, auditable, and requires no feature engineering. The exact size is confirmed only after coverage validation.
 
 **Option B — Binary feature vectors from phonemes.csv**
 
