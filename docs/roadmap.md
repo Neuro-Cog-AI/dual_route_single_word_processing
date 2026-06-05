@@ -108,6 +108,12 @@ Phase 3 is split into sub-steps:
 
 **Success criterion:** All No_Stress phonemes covered; lengths validated; `WordItem` and `PseudowordItem` load with correct tensor shapes; required-field errors are explicit; encoded items run through REPETITION `run_trial()`; existing tests unaffected.
 
+**Additional Phase 3b deliverables (supervised trial targets):**
+- `src/lichtheim2/semantics.py`: `assign_artificial_semantics()` — reproducible binary semantic vectors keyed by row_index
+- `src/lichtheim2/trials.py`: `SupervisedTrial` dataclass; `make_repetition_trial()`, `make_comprehension_trial()`, `make_speaking_trial()` with shape validation
+- `tests/test_supervised_trials.py`: always-run tests for semantics and all three trial factories
+- `docs/training_notes.md`: GPU-readiness note
+
 ### Phase 3c — Training Loop — **Pending**
 
 **Goal:** Implement the online training loop using English/NWR-style data (real words from wfe.csv, pseudowords from ssp.csv for repetition/generalization).
@@ -147,16 +153,14 @@ Phase 3 is split into sub-steps:
 
 ---
 
-## Phase 6 — English Adaptation / SWP-Inspired Extension
+## Phase 6 — Further Extensions
 
-**Goal:** Adapt the model to English phonology and/or a richer semantic representation. Begins only after Phase 3 is confirmed faithful.
+**Goal:** Extensions beyond the English/NWR training setup, to be scoped after Phase 3 is confirmed. Possible directions include:
 
-**Open questions before starting:**
-- Fixed-length vs. variable-length phonological sequences
-- Articulatory vs. phonemic feature representation
-- Distributional vs. artificial semantic vectors
-- Whether to use SWP word norms or a curated English vocabulary
+- Richer semantic representations (distributional embeddings, curated norms)
+- Cross-linguistic comparisons or alternative phoneme encodings
+- Larger-scale representational similarity analyses and links to SWP behavioural/neural data
+- Lesioning and recovery simulations
+- Alternative architectures or ablation studies
 
-See [docs/open_questions.md](open_questions.md) for the full list.
-
-**Success criterion:** TBD after Phase 3 is confirmed.
+**Success criterion:** TBD.
