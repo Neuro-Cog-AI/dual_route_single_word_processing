@@ -105,4 +105,15 @@ for epoch in range(n_epochs):
 1. Exact LENS-to-PyTorch translation of the cross-entropy loss with zero-error radius and frequency scaling `[Inferred]`
 2. Whether presentation order within epoch is fully random across all task × word combinations, or partially blocked `[Open]`
 3. Whether backpropagation covers all 6 ticks of a repetition trial as a single unrolled graph, or is truncated `[Open]`
-4. Weight initialisation: uniform in [−1, 1] for most connections, [−0.5, 0.5] for recurrent connections; bias weights initialised at −1 `[Paper]` — confirm PyTorch `nn.Linear` equivalent
+4. Weight initialisation: uniform in [−1, 1] for most connections, [−0.5, 0.5] for recurrent connections `[Paper]`; PyTorch additive bias = −1.0 is an implementation assumption approximating the LENS bias-link convention `[Inferred]`
+
+---
+
+## GPU Readiness
+
+`Lichtheim2Model` is a standard `nn.Module` and is device-agnostic in principle. No `.to(device)` calls have been added to the model or trial code yet. GPU support will be added in Phase 3c (training loop) by:
+
+- `model.to(device)` at initialisation
+- Moving trial tensors (`phon_tensor`, `sem_input`, `motor_targets`, etc.) with `.to(device)` before each forward pass
+
+`SupervisedTrial` tensors are created on CPU; the training loop is the right place to move them to the target device. No architecture changes are needed.
