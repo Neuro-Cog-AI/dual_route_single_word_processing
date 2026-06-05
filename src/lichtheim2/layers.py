@@ -51,21 +51,29 @@ class TickResult:
     state: ModelState                # layer activations after this tick
 
 
-def init_state(cfg: "ModelConfig") -> ModelState:
-    """Initialise a fresh trial state.
+def init_state(
+    cfg: "ModelConfig",
+    device: "torch.device | str" = "cpu",
+) -> ModelState:
+    """Initialise a fresh trial state on the given device.
 
     [Paper]: "At the beginning of each trial, activations for all units in the
     hidden layer (including vATL-output layer) were set to 0.5, and for all
     units in the insular-motor output layer to zero."
+
+    Args:
+        cfg:    model configuration
+        device: device for the state tensors; should match the model device
     """
+    dev = torch.device(device) if isinstance(device, str) else device
     return ModelState(
-        iSMG=torch.full((cfg.iSMG_hidden_size,), 0.5),
-        iSMG_context=torch.full((cfg.iSMG_hidden_size,), 0.5),
-        motor=torch.zeros(cfg.motor_output_size),
-        motor_context=torch.zeros(cfg.motor_output_size),
-        mSTG=torch.full((cfg.mSTG_hidden_size,), 0.5),
-        aSTG=torch.full((cfg.aSTG_hidden_size,), 0.5),
-        vATL_out=torch.full((cfg.vATL_size,), 0.5),
-        vATL_context=torch.full((cfg.vATL_size,), 0.5),
-        triangularis=torch.full((cfg.triangularis_hidden_size,), 0.5),
+        iSMG=torch.full((cfg.iSMG_hidden_size,), 0.5, device=dev),
+        iSMG_context=torch.full((cfg.iSMG_hidden_size,), 0.5, device=dev),
+        motor=torch.zeros(cfg.motor_output_size, device=dev),
+        motor_context=torch.zeros(cfg.motor_output_size, device=dev),
+        mSTG=torch.full((cfg.mSTG_hidden_size,), 0.5, device=dev),
+        aSTG=torch.full((cfg.aSTG_hidden_size,), 0.5, device=dev),
+        vATL_out=torch.full((cfg.vATL_size,), 0.5, device=dev),
+        vATL_context=torch.full((cfg.vATL_size,), 0.5, device=dev),
+        triangularis=torch.full((cfg.triangularis_hidden_size,), 0.5, device=dev),
     )
