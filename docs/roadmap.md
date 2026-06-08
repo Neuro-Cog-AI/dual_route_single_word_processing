@@ -140,7 +140,7 @@ Phase 3c is split into sub-steps:
 
 **Success criterion:** Script runs end-to-end on real wfe.csv / ssp.csv items with finite loss; all always-run tests pass without private CSV files; existing tests unaffected. ✓
 
-#### Phase 3c-3 — Real-Data Multi-Task Training — **In Progress**
+#### Phase 3c-3 — Real-Data Multi-Task Training — **Complete**
 
 **Goal:** Pipeline validation step. Extend real-data training to all three task types: real words receive repetition + comprehension + speaking trials; pseudowords remain repetition-only. No batching, no LR schedule, no frequency weighting, no accuracy logging, no checkpoints.
 
@@ -148,7 +148,22 @@ Phase 3c is split into sub-steps:
 - `scripts/train_multitask_real_data.py`: CLI script with helper functions (`build_word_trials`, `build_pseudo_trials`, `train_multitask_epochs`). Semantics assigned to all words before sampling for reproducibility.
 - `tests/test_multitask_training_data.py`: always-run tests (mock `WordItem`/`PseudowordItem` dataclasses, toy config) + CSV-dependent integration tests
 
-**Success criterion:** Script runs end-to-end with finite losses across all three task types; always-run tests pass without private CSV files; existing tests unaffected. LR schedule, frequency weighting, accuracy logging, and full epoch schedule deferred to Phase 3c-4.
+**Success criterion:** Script runs end-to-end with finite losses across all three task types; always-run tests pass without private CSV files; existing tests unaffected. ✓
+
+#### Phase 3c-4 — Small-Subset Training Stability Diagnostics — **In Progress**
+
+**Goal:** Determine whether the model can learn stably on tiny controlled subsets before committing to paper-like schedules, frequency weighting, and full-scale training.
+
+**Modes:**
+- `repetition` — repetition trials for words + pseudowords
+- `words-multitask` — rep+comp+spk for words only (no ssp.csv required)
+- `mixed-multitask` — rep+comp+spk for words, rep for pseudowords
+
+**Deliverables:**
+- `scripts/diagnose_small_subset_training.py`: diagnostic script with `DiagnosticResult` dataclass, `sample_items()`, `build_word_rep_trials()`, `build_trials_for_mode()`, `run_diagnostic_epochs()`. Defaults: `--lr 0.01`, `--zero-error-radius 0.0`, `--epochs 20`, `--max-words 10`, `--max-pseudowords 10`. Non-finite loss raises `RuntimeError` with epoch/task/label context. Loads CSVs only as needed by mode.
+- `tests/test_small_subset_training_diagnostics.py`: always-run tests (mock dataclasses, toy config) + CSV-dependent integration tests
+
+**Success criterion:** Diagnostic script runs with finite losses for all modes; `DiagnosticResult` fields are correct; always-run tests pass without private CSV files; existing tests unaffected.
 
 ---
 

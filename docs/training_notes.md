@@ -138,6 +138,19 @@ Scope (Phase 3c-3 only):
 - No presentation schedule (1× rep, 2× spk, 3× comp per word). Each trial appears once per epoch.
 - No LR schedule, frequency weighting, accuracy logging, checkpoints, or plots.
 
+## Training Loop — Phase 3c-4 Implementation
+
+Phase 3c-4 adds a stability diagnostic script (`scripts/diagnose_small_subset_training.py`).
+
+Key design decisions:
+- New script (not an extension of 3c-3): different defaults, different purpose, richer diagnostic output. Helper functions from `train_multitask_real_data.py` are imported directly (safe since that script is guarded by `if __name__ == "__main__"`).
+- `sample_items(items, max_count, rng)`: `None` = use all, `0` = use none, `n > 0` = sample up to n. Avoids truthiness bugs where `0` would be treated as "use all".
+- CSV loading is mode-selective: `words-multitask` never touches `ssp.csv`; `repetition`/`mixed-multitask` load pseudowords only if `max_pseudowords != 0`.
+- Zero-trial guard: if trial list is empty after building, exits with a clear error.
+- Non-finite loss guard in `run_diagnostic_epochs`: raises `RuntimeError` with epoch, task, and label context rather than silently continuing or returning NaN stats.
+- `DiagnosticResult` dataclass: `epoch_losses`, `epoch_avgs`, `initial_avg`, `final_avg`, `best_avg`, `best_epoch` (1-indexed). Allows tests to assert on specific statistics.
+- Safer defaults than pipeline-validation scripts: `--lr 0.01`, `--zero-error-radius 0.0` (no dead-zone, good for debugging), `--epochs 20`, `--max-words 10`, `--max-pseudowords 10`.
+
 ## Open Issues for Phase 3c+ (continuation)
 
 1. Multi-task epoch loop: 1× repetition, 2× speaking, 3× comprehension per word per epoch `[Paper]`
