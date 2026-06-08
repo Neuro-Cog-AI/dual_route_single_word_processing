@@ -100,26 +100,32 @@ Loss computation (`src/lichtheim2/losses.py`):
 
 Device handling: `init_state`, `forward_tick`, and `run_trial` all propagate the model device. `trainer.py` moves `SupervisedTrial` tensors to the target device before each step.
 
-## Training Loop — Full Epoch (Phase 3c-2 — Pending)
+## Training Loop — Phase 3c-2 Implementation
 
-```
-for epoch in range(n_epochs):
-    shuffle word order
-    for word in vocabulary:
-        present word 1× for repetition   → update weights
-        present word 2× for speaking     → update weights each time
-        present word 3× for comprehension → update weights each time
-    log per-task accuracy on full vocabulary
-```
+Phase 3c-2 adds a real-data repetition training script (`scripts/train_repetition_real_data.py`) with four helper functions:
 
----
+- `load_repetition_items(data_dir, source)` — loads `WordItem`/`PseudowordItem` from CSV and returns `(phon_tensor, label, item_id)` tuples. Labels always include a source prefix (`word:` or `pseudo:`) so word and pseudoword row indices never collide.
+- `sample_items(items, max_items, rng)` — takes a random subset for smoke runs; `--max-items` is applied to the pooled list (not per-source).
+- `build_repetition_trials(items, motor_size)` — calls `make_repetition_trial()` per item, preserving `item_id` and `label` for traceability.
+- `train_repetition_epochs(model, trials, optimizer, cfg, epochs, zero_error_radius, device, rng)` — shuffles trials each epoch and calls `train_step()` item-by-item.
 
-## Open Issues for Phase 3
+CLI arguments: `--data-dir`, `--config`, `--source words|pseudowords|mixed`, `--max-items`, `--epochs`, `--lr`, `--device`, `--seed`, `--zero-error-radius` (default 0.1, per paper; 0.0 disables dead-zone for debugging).
 
-1. Exact LENS-to-PyTorch translation of the cross-entropy loss with zero-error radius and frequency scaling `[Inferred]`
-2. Whether presentation order within epoch is fully random across all task × word combinations, or partially blocked `[Open]`
-3. Whether backpropagation covers all 6 ticks of a repetition trial as a single unrolled graph, or is truncated `[Open]`
-4. Weight initialisation: uniform in [−1, 1] for most connections, [−0.5, 0.5] for recurrent connections `[Paper]`; PyTorch additive bias = −1.0 is an implementation assumption approximating the LENS bias-link convention `[Inferred]`
+Device handling: if `--device cuda` or `--device mps` is requested but the backend is unavailable, the script raises an explicit error and exits 1. No silent fallback.
+
+Scope (Phase 3c-2 only):
+- Repetition task only. No comprehension, speaking, batching, EOS, or semantic vectors.
+- No LR schedule, frequency weighting, accuracy logging, checkpoints, or plots.
+- Full multi-task epoch loop deferred to a later sub-step.
+
+## Open Issues for Phase 3c+ (continuation)
+
+1. Multi-task epoch loop: 1× repetition, 2× speaking, 3× comprehension per word per epoch `[Paper]`
+2. Frequency-weighted presentation rate `[Open — D16]`
+3. LR schedule: 0.5 (epochs 1–150) → stepwise decay → 0.1 (epochs 181–200) `[Paper]`
+4. Accuracy metric: proportion of words correct per epoch per task `[Inferred]`
+5. Phoneme coverage validation is already implemented (see `validate_phoneme_coverage()` in `encoding.py` and coverage tests). It should continue to be enforced before running full training experiments.
+6. Presentation order within epoch: fully random vs. task-blocked `[Open — D8]`
 
 ---
 

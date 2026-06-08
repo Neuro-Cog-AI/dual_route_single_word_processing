@@ -130,17 +130,15 @@ Phase 3c is split into sub-steps:
 
 **Success criterion:** A small synthetic repetition training run decreases loss; existing tests pass; no full experiment or batching yet.
 
-#### Phase 3c-2 — Full Epoch Loop — **Pending**
+#### Phase 3c-2 — Real-Data Repetition Training — **In Progress**
 
-**Goal:** Implement the online training loop using English/NWR-style data (real words from wfe.csv, pseudowords from ssp.csv for repetition/generalization).
+**Goal:** Pipeline validation step. Connect real CSV data (wfe.csv, ssp.csv) to the training loop for the repetition task only. Repetition only; no comprehension, speaking, batching, EOS, checkpoints, or plots.
 
 **Deliverables:**
-- Epoch loop with word × task presentation schedule
-- `src/lichtheim2/training.py`: online item-by-item update loop
-- `scripts/train_english_nwr.py`: training entry point
-- Logging of per-task accuracy over epochs
+- `scripts/train_repetition_real_data.py`: CLI script with helper functions (`load_repetition_items`, `sample_items`, `build_repetition_trials`, `train_repetition_epochs`)
+- `tests/test_repetition_training_data.py`: always-run tests (mock CSVs, toy config) + CSV-dependent integration tests (skip gracefully if private data absent)
 
-**Success criterion:** The model learns the intended English/NWR-style tasks with interpretable learning curves and appropriate effects of lexicality, frequency, and length where applicable. To be reviewed before moving to Phase 4.
+**Success criterion:** Script runs end-to-end on real wfe.csv / ssp.csv items with finite loss; all always-run tests pass without private CSV files; existing tests unaffected. Full multi-task epoch loop, LR schedule, frequency weighting, and accuracy logging deferred to Phase 3c-3.
 
 ---
 
