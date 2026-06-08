@@ -130,7 +130,7 @@ Phase 3c is split into sub-steps:
 
 **Success criterion:** A small synthetic repetition training run decreases loss; existing tests pass; no full experiment or batching yet.
 
-#### Phase 3c-2 — Real-Data Repetition Training — **In Progress**
+#### Phase 3c-2 — Real-Data Repetition Training — **Complete**
 
 **Goal:** Pipeline validation step. Connect real CSV data (wfe.csv, ssp.csv) to the training loop for the repetition task only. Repetition only; no comprehension, speaking, batching, EOS, checkpoints, or plots.
 
@@ -138,7 +138,17 @@ Phase 3c is split into sub-steps:
 - `scripts/train_repetition_real_data.py`: CLI script with helper functions (`load_repetition_items`, `sample_items`, `build_repetition_trials`, `train_repetition_epochs`)
 - `tests/test_repetition_training_data.py`: always-run tests (mock CSVs, toy config) + CSV-dependent integration tests (skip gracefully if private data absent)
 
-**Success criterion:** Script runs end-to-end on real wfe.csv / ssp.csv items with finite loss; all always-run tests pass without private CSV files; existing tests unaffected. Full multi-task epoch loop, LR schedule, frequency weighting, and accuracy logging deferred to Phase 3c-3.
+**Success criterion:** Script runs end-to-end on real wfe.csv / ssp.csv items with finite loss; all always-run tests pass without private CSV files; existing tests unaffected. ✓
+
+#### Phase 3c-3 — Real-Data Multi-Task Training — **In Progress**
+
+**Goal:** Pipeline validation step. Extend real-data training to all three task types: real words receive repetition + comprehension + speaking trials; pseudowords remain repetition-only. No batching, no LR schedule, no frequency weighting, no accuracy logging, no checkpoints.
+
+**Deliverables:**
+- `scripts/train_multitask_real_data.py`: CLI script with helper functions (`build_word_trials`, `build_pseudo_trials`, `train_multitask_epochs`). Semantics assigned to all words before sampling for reproducibility.
+- `tests/test_multitask_training_data.py`: always-run tests (mock `WordItem`/`PseudowordItem` dataclasses, toy config) + CSV-dependent integration tests
+
+**Success criterion:** Script runs end-to-end with finite losses across all three task types; always-run tests pass without private CSV files; existing tests unaffected. LR schedule, frequency weighting, accuracy logging, and full epoch schedule deferred to Phase 3c-4.
 
 ---
 
