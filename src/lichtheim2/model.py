@@ -113,9 +113,10 @@ class Lichtheim2Model(nn.Module):
             either state.vATL_context or the external clamp.
         """
         sound_size = self.sound_to_iSMG.in_features
+        device = self.sound_to_iSMG.weight.device
 
         # 1. Resolve inputs
-        sound_in = sound if sound is not None else torch.zeros(sound_size)
+        sound_in = sound if sound is not None else torch.zeros(sound_size, device=device)
         vATL_input_used = (
             clamp_vATL_in if clamp_vATL_in is not None else state.vATL_context
         )
@@ -178,19 +179,25 @@ class Lichtheim2Model(nn.Module):
         All inputs and internal activations at every tick are accessible
         through the returned TickResult list.
         """
-        state = init_state(cfg)
+        device = next(self.parameters()).device
+        state = init_state(cfg, device=device)
         tick_inputs = build_trial_inputs(task, phon_pattern, sem_pattern, cfg)
-        zero_sound = torch.zeros(cfg.sound_input_size)
+        zero_sound = torch.zeros(cfg.sound_input_size, device=device)
         results: list[TickResult] = []
 
         for t, (sound, clamp_vATL) in enumerate(tick_inputs):
-            new_state, vATL_used = self.forward_tick(state, sound, clamp_vATL)
+            # Move task-generated tensors to model device. build_trial_inputs
+            # always creates CPU tensors via torch.zeros / .clone(); moving them
+            # here ensures correctness when the model is on CUDA or MPS.
+            sound_dev = sound.to(device) if sound is not None else None
+            clamp_dev = clamp_vATL.to(device) if clamp_vATL is not None else None
+            new_state, vATL_used = self.forward_tick(state, sound_dev, clamp_dev)
             # build_trial_inputs always returns actual tensors for sound (never None);
             # the None branch below is a safety net for hypothetical direct callers.
             results.append(TickResult(
                 tick_index=t,
                 task=task,
-                sound_input=sound if sound is not None else zero_sound,
+                sound_input=sound_dev if sound_dev is not None else zero_sound,
                 vATL_input_used=vATL_used,
                 state=new_state,
             ))

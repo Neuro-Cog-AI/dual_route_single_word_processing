@@ -114,11 +114,28 @@ Phase 3 is split into sub-steps:
 - `tests/test_supervised_trials.py`: always-run tests for semantics and all three trial factories
 - `docs/training_notes.md`: GPU-readiness note
 
-### Phase 3c — Training Loop — **Pending**
+### Phase 3c — Training Loop — **In Progress**
+
+Phase 3c is split into sub-steps:
+
+### Phase 3c-1 — Minimal Training Loop — **In Progress**
+
+**Goal:** Implement the first minimal PyTorch training loop for supervised trials.
+
+**Deliverables:**
+- `src/lichtheim2/losses.py`: masked BCE loss over motor and semantic outputs
+- `src/lichtheim2/trainer.py`: `train_step()` and device-aware trial transfer
+- `scripts/smoke_train_repetition.py`: synthetic repetition smoke training
+- `tests/test_training_loop.py`: loss, gradient, parameter update, finite-loss, and loss-decrease tests
+
+**Success criterion:** A small synthetic repetition training run decreases loss; existing tests pass; no full experiment or batching yet.
+
+#### Phase 3c-2 — Full Epoch Loop — **Pending**
 
 **Goal:** Implement the online training loop using English/NWR-style data (real words from wfe.csv, pseudowords from ssp.csv for repetition/generalization).
 
 **Deliverables:**
+- Epoch loop with word × task presentation schedule
 - `src/lichtheim2/training.py`: online item-by-item update loop
 - `scripts/train_english_nwr.py`: training entry point
 - Logging of per-task accuracy over epochs

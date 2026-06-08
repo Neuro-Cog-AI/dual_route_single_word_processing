@@ -84,9 +84,23 @@ This is applied before computing the gradient, not as a loss modification. In Py
 
 ---
 
-## Training Loop Sketch
+## Training Loop — Phase 3c-1 Implementation
 
-Not implemented yet. This is a specification sketch for Phase 3:
+Online (item-by-item) training is implemented in `src/lichtheim2/trainer.py`:
+
+```python
+loss = train_step(model, trial, optimizer, cfg, zero_error_radius=0.0, device="cpu")
+```
+
+Loss computation (`src/lichtheim2/losses.py`):
+- Binary cross-entropy on sigmoid outputs vs binary targets
+- Motor loss: applied at all ticks indicated by `motor_loss_mask`
+- Semantic loss: applied at all ticks indicated by `semantic_loss_mask` (comprehension)
+- Zero-error radius: optional dead-zone threshold (default 0.0 = disabled; paper: 0.1)
+
+Device handling: `init_state`, `forward_tick`, and `run_trial` all propagate the model device. `trainer.py` moves `SupervisedTrial` tensors to the target device before each step.
+
+## Training Loop — Full Epoch (Phase 3c-2 — Pending)
 
 ```
 for epoch in range(n_epochs):
@@ -111,9 +125,11 @@ for epoch in range(n_epochs):
 
 ## GPU Readiness
 
-`Lichtheim2Model` is a standard `nn.Module` and is device-agnostic in principle. No `.to(device)` calls have been added to the model or trial code yet. GPU support will be added in Phase 3c (training loop) by:
+`Lichtheim2Model` is a standard `nn.Module`. Device support is implemented in Phase 3c-1:
 
-- `model.to(device)` at initialisation
-- Moving trial tensors (`phon_tensor`, `sem_input`, `motor_targets`, etc.) with `.to(device)` before each forward pass
+- `init_state(cfg, device=device)` creates state tensors on the model device
+- `forward_tick` and `run_trial` infer device from model parameters
+- `run_trial` moves task-generated tensors (sound inputs, clamp_vATL) to the model device before each tick
+- `move_trial_to_device(trial, device)` in `trainer.py` moves all `SupervisedTrial` tensors
 
-`SupervisedTrial` tensors are created on CPU; the training loop is the right place to move them to the target device. No architecture changes are needed.
+To train on GPU: `model.to("cuda")` before calling `train_step(..., device="cuda")`.
