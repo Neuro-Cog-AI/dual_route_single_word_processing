@@ -118,19 +118,17 @@ Phase 3 is split into sub-steps:
 
 Phase 3c is split into sub-steps:
 
-#### Phase 3c-1 — Minimal Training Loop — **In Progress**
+### Phase 3c-1 — Minimal Training Loop — **In Progress**
 
-**Goal:** Implement loss computation and a single online training step; verify loss decreases on a tiny synthetic example. No epoch loop, no real data, no frequency schedule yet.
+**Goal:** Implement the first minimal PyTorch training loop for supervised trials.
 
 **Deliverables:**
-- `src/lichtheim2/losses.py`: `compute_trial_loss()` — BCE with optional zero-error radius, applied to motor and semantic outputs
-- `src/lichtheim2/trainer.py`: `move_trial_to_device()`, `train_step()` — single online step with device support
-- `src/lichtheim2/layers.py`: `init_state(cfg, device)` — device-aware state initialisation
-- `src/lichtheim2/model.py`: device-aware `forward_tick` and `run_trial`; task-generated tensors moved to model device
-- `tests/test_training_loop.py`: always-run CPU tests for loss, masks, radius, step, device
-- `scripts/smoke_train_repetition.py`: smoke script; trains 20 steps on one synthetic repetition item
+- `src/lichtheim2/losses.py`: masked BCE loss over motor and semantic outputs
+- `src/lichtheim2/trainer.py`: `train_step()` and device-aware trial transfer
+- `scripts/smoke_train_repetition.py`: synthetic repetition smoke training
+- `tests/test_training_loop.py`: loss, gradient, parameter update, finite-loss, and loss-decrease tests
 
-**Success criterion:** `test_loss_decreases_with_training` passes; smoke script exits 0; existing tests unaffected.
+**Success criterion:** A small synthetic repetition training run decreases loss; existing tests pass; no full experiment or batching yet.
 
 #### Phase 3c-2 — Full Epoch Loop — **Pending**
 
