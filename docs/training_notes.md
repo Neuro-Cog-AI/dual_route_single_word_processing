@@ -118,6 +118,26 @@ Scope (Phase 3c-2 only):
 - No LR schedule, frequency weighting, accuracy logging, checkpoints, or plots.
 - Full multi-task epoch loop deferred to a later sub-step.
 
+## Training Loop — Phase 3c-3 Implementation
+
+Phase 3c-3 adds a real-data multi-task training script (`scripts/train_multitask_real_data.py`) with three helper functions:
+
+- `build_word_trials(word_items, sem_map, motor_size)` — builds REPETITION, COMPREHENSION, and SPEAKING trials for each real word. Semantics are assigned to **all** words before sampling so each word's vector is stable regardless of subset. Raises `ValueError` if any `WordItem.row_index is None`. Labels: `word:{row_index}:{word}`.
+- `build_pseudo_trials(pseudo_items, motor_size)` — builds REPETITION-only trials for pseudowords. Labels: `pseudo:{row_index}`.
+- `train_multitask_epochs(model, trials, optimizer, cfg, epochs, zero_error_radius, device, rng)` — shuffles all trials each epoch (fully random, per-item); returns `list[dict[Task, list[float]]]` keyed by task. Prints per-task avg loss per epoch.
+
+CLI defaults: `--max-words 50`, `--max-pseudowords 50` (safe defaults to avoid ~20k+ trials/epoch before full training is intended).
+
+Semantic vectors: first-pass random binary vectors from `assign_artificial_semantics()` (prototype-based faithful generation deferred to Phase 3c-4+).
+
+Task semantics:
+- For COMPREHENSION: `sem_tensor` is the vATL **output target** (what vATL should produce).
+- For SPEAKING: `sem_tensor` is the vATL **input** (clamped at each tick).
+
+Scope (Phase 3c-3 only):
+- No presentation schedule (1× rep, 2× spk, 3× comp per word). Each trial appears once per epoch.
+- No LR schedule, frequency weighting, accuracy logging, checkpoints, or plots.
+
 ## Open Issues for Phase 3c+ (continuation)
 
 1. Multi-task epoch loop: 1× repetition, 2× speaking, 3× comprehension per word per epoch `[Paper]`
