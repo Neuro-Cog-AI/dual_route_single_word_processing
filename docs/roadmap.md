@@ -176,7 +176,7 @@ Phase 3c is split into sub-steps:
 
 **Success criterion:** `compute_trial_loss_breakdown().total_loss` numerically identical to `compute_trial_loss()`; active unit counts correct; normalized per-unit losses finite; always-run tests pass without private CSV files; existing tests unaffected. ✓
 
-#### Phase 3c-6 — Optional Loss Reduction Modes — **In Progress**
+#### Phase 3c-6 — Optional Loss Reduction Modes — **Complete**
 
 **Goal:** Add a `mean_active` loss reduction option for small-subset diagnostics. Keeps `sum` as the default (paper behavior); `mean_active` normalizes by the number of active output elements to diagnose task imbalance.
 
@@ -187,7 +187,19 @@ Phase 3c is split into sub-steps:
 - `tests/test_training_loop.py`: parity test (`sum` == default), `mean_active` value/finiteness tests, dead-zone interaction test, invalid-string error test, `train_step` with `mean_active`
 - `tests/test_small_subset_training_diagnostics.py`: `run_diagnostic_epochs` with `loss_reduction="mean_active"` stays finite
 
-**Success criterion:** `loss_reduction="sum"` is bit-for-bit identical to previous default; `mean_active` = `total_loss / n_active`; dead-zone interaction correct; invalid string raises `ValueError`; always-run tests pass without CSV files; existing tests unaffected.
+**Success criterion:** `loss_reduction="sum"` is bit-for-bit identical to previous default; `mean_active` = `total_loss / n_active`; dead-zone interaction correct; invalid string raises `ValueError`; always-run tests pass without CSV files; existing tests unaffected. ✓
+
+#### Phase 3c-7 — Loss Reduction Comparison — **In Progress**
+
+**Goal:** Lightweight comparison script that runs both `sum` and `mean_active` reductions under identical conditions and prints a compact table, so training dynamics can be directly compared before committing to a default.
+
+**Deliverables:**
+- `scripts/diagnose_small_subset_training.py`: `verbose: bool = True` added to `run_diagnostic_epochs()` (default unchanged; compare script calls with `verbose=False`)
+- `scripts/compare_loss_reductions.py`: `ComparisonResult` dataclass, `run_comparison()` (same seed/data/epochs/lr for both reductions), `print_comparison_table()` (summary + per-task final losses)
+- `tests/test_loss_reduction_comparison.py`: always-run tests for `run_comparison` return shape, epoch counts, field presence, loss finiteness; `validate_args` tests; CSV-dependent integration test
+- `tests/test_small_subset_training_diagnostics.py`: `test_run_diagnostic_epochs_verbose_false_returns_finite`
+
+**Success criterion:** `run_comparison()` returns `DiagnosticResult` for both reductions with identical epoch counts and finite losses; `verbose=False` path tested; always-run tests pass without CSV files; existing tests unaffected.
 
 ---
 
