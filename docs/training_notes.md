@@ -271,6 +271,46 @@ to compare training dynamics.
 The compare script passes `verbose=False` to suppress per-epoch logs so only the
 final table is printed.
 
+## Training Loop — Phase 3c-8 Implementation
+
+Phase 3c-8 adds a task schedule comparison script (`scripts/compare_task_schedules.py`).
+
+### Schedule definitions
+
+```
+SCHEDULES["uniform"] = {REP: 1, COMP: 1, SPK: 1}   # 3 trials/word
+SCHEDULES["paper"]   = {REP: 1, COMP: 3, SPK: 2}   # 6 trials/word [Ueno et al. 2011]
+```
+
+Pseudowords always receive 1×REP regardless of schedule.
+
+### Within-word trial order
+
+Trials are constructed in the order: REP×n_rep, then COMP×n_comp, then SPK×n_spk.
+This order is fixed for reproducibility and testing. `run_diagnostic_epochs()` shuffles
+the full trial list every epoch, so construction order does not bias training.
+
+Example (paper schedule, one word): `[REP, COMP, COMP, COMP, SPK, SPK]`
+
+### Fairness guarantee in `run_schedule_comparison()`
+
+Identical to Phase 3c-7:
+- Items loaded and sampled once; both schedules share the same `word_items`/`pseudo_items`.
+- `torch.manual_seed(seed)` + `random.Random(seed)` per schedule run.
+- Same `epochs`, `lr`, `zero_error_radius`, `device`, `loss_reduction`.
+- `verbose=False`.
+
+### Interpreting the output
+
+The paper schedule produces 2× more trials per epoch than uniform. **Do not compare
+absolute losses directly.** Use `% decrease` and per-task `initial→final` losses:
+- `% decrease = (initial_avg − final_avg) / initial_avg × 100` (positive = loss dropped)
+- Per-task `initial→final` shows which tasks improve most under each schedule
+
+Default `--loss-reduction mean_active` (unlike other scripts that default to `sum`)
+because normalising by active elements is more informative when comparing schedules
+with different trial-per-epoch counts.
+
 ## Open Issues for Phase 3c+ (continuation)
 
 1. Multi-task epoch loop: 1× repetition, 2× speaking, 3× comprehension per word per epoch `[Paper]`

@@ -199,7 +199,17 @@ Phase 3c is split into sub-steps:
 - `tests/test_loss_reduction_comparison.py`: always-run tests for `run_comparison` return shape, epoch counts, field presence, loss finiteness; `validate_args` tests; CSV-dependent integration test
 - `tests/test_small_subset_training_diagnostics.py`: `test_run_diagnostic_epochs_verbose_false_returns_finite`
 
-**Success criterion:** `run_comparison()` returns `DiagnosticResult` for both reductions with identical epoch counts and finite losses; `verbose=False` path tested; always-run tests pass without CSV files; existing tests unaffected.
+**Success criterion:** `run_comparison()` returns `DiagnosticResult` for both reductions with identical epoch counts and finite losses; `verbose=False` path tested; always-run tests pass without CSV files; existing tests unaffected. ✓
+
+#### Phase 3c-8 — Task Schedule Diagnostics — **In Progress**
+
+**Goal:** Compare the uniform (1×REP+1×COMP+1×SPK) and paper-like (1×REP+3×COMP+2×SPK) task presentation schedules on small controlled subsets to understand how schedule affects learning dynamics before committing to the paper schedule.
+
+**Deliverables:**
+- `scripts/compare_task_schedules.py`: `SCHEDULES` dict, `ScheduleComparisonResult`, `build_word_trials_with_schedule()`, `build_trials_for_schedule()`, `run_schedule_comparison()` (same fairness guarantee as Phase 3c-7), `print_schedule_comparison_table()` (summary + per-task initial→final losses). Default `--loss-reduction mean_active`.
+- `tests/test_task_schedule_diagnostics.py`: trial count/order tests, mode-aware builder tests, comparison result tests, `validate_args` tests, CSV-dependent integration test
+
+**Success criterion:** `build_word_trials_with_schedule` produces correct counts and order for both schedules; `run_schedule_comparison` returns finite losses for both; `trials_per_epoch["paper"] > trials_per_epoch["uniform"]`; always-run tests pass without CSV files; existing tests unaffected.
 
 ---
 
