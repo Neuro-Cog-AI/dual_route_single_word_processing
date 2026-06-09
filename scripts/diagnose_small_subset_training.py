@@ -166,13 +166,18 @@ def run_diagnostic_epochs(
     rng: random.Random,
     loss_reduction: str = "sum",
     verbose: bool = True,
+    lr_schedule_fn=None,
 ) -> DiagnosticResult:
     """Run diagnostic training loop and return structured statistics.
 
     Args:
-        loss_reduction: "sum" (default) or "mean_active"; passed to train_step().
-        verbose:        if True (default), print a per-epoch summary line;
-                        set to False for silent operation (e.g. comparison scripts).
+        loss_reduction:  "sum" (default) or "mean_active"; passed to train_step().
+        verbose:         if True (default), print a per-epoch summary line;
+                         set to False for silent operation (e.g. comparison scripts).
+        lr_schedule_fn:  optional callable(epoch: int) -> float, where epoch is
+                         1-indexed.  If provided, all optimizer param_groups are
+                         updated to the returned LR at the start of every epoch.
+                         Default None → LR is never modified (existing behavior).
 
     Raises:
         RuntimeError: if any item loss is non-finite (nan or inf), with
@@ -182,6 +187,10 @@ def run_diagnostic_epochs(
     epoch_avgs: list[float] = []
 
     for epoch in range(1, epochs + 1):
+        if lr_schedule_fn is not None:
+            lr = lr_schedule_fn(epoch)
+            for group in optimizer.param_groups:
+                group["lr"] = lr
         order = list(trials)
         rng.shuffle(order)
         epoch_losses: dict[Task, list[float]] = {t: [] for t in Task}

@@ -372,14 +372,83 @@ table to aid interpretation.
 Default `--loss-reduction mean_active` (same as Phase 3c-8) because normalised loss
 is more informative for schedule/weight comparisons.
 
+## Training Loop — Phase 3c-10 Implementation
+
+Phase 3c-10 adds an LR schedule comparison script and a thin `lr_schedule_fn` hook in
+`run_diagnostic_epochs`.
+
+### Paper-proportional LR schedule
+
+The paper LR schedule (Ueno et al. 2011 `[Paper]`) defines 5 phases over 200 epochs:
+
+| Epoch range | Fraction of total | LR (paper) | Multiplier |
+|---|---|---|---|
+| 1–150   | 0–75%   | 0.5 | 1.0 |
+| 151–160 | 75–80%  | 0.4 | 0.8 |
+| 161–170 | 80–85%  | 0.3 | 0.6 |
+| 171–180 | 85–90%  | 0.2 | 0.4 |
+| 181–200 | 90–100% | 0.1 | 0.2 |
+
+The "paper-proportional LR schedule" maps these boundaries proportionally to the
+requested `--epochs`, so the comparison is meaningful at any epoch count. For
+`--epochs 200 --lr 0.5`, this reproduces the exact paper values.
+
+```python
+def lr_for_epoch(base_lr, epoch, lr_schedule, total_epochs):
+    frac = epoch / total_epochs
+    if lr_schedule == "constant":
+        return base_lr
+    elif lr_schedule == "paper":
+        if frac <= 0.75: return base_lr
+        elif frac <= 0.80: return base_lr * 0.8
+        elif frac <= 0.85: return base_lr * 0.6
+        elif frac <= 0.90: return base_lr * 0.4
+        else:              return base_lr * 0.2
+```
+
+### `lr_schedule_fn` hook in `run_diagnostic_epochs()`
+
+```python
+run_diagnostic_epochs(..., lr_schedule_fn=None)
+```
+
+At the start of each epoch, if `lr_schedule_fn` is provided, all param groups are
+updated:
+
+```python
+if lr_schedule_fn is not None:
+    lr = lr_schedule_fn(epoch)      # 1-indexed epoch
+    for group in optimizer.param_groups:
+        group["lr"] = lr
+```
+
+Default `None` → existing behavior unchanged.
+
+### `LRComparisonResult` dataclass
+
+```python
+@dataclass
+class LRComparisonResult:
+    results: dict[str, DiagnosticResult]      # keys: "constant", "paper"
+    trials_per_epoch: int
+    lr_schedule_used: dict[str, list[float]]  # condition → LR at each epoch
+```
+
+### CLI notes
+
+- `--task-schedule paper|uniform` — task presentation schedule (distinct from the LR
+  schedule to avoid ambiguity; internal variable `task_schedule`)
+- `--frequency-source none|zipf|frequency` — `"none"` (default) means unweighted
+- Default `--loss-reduction mean_active`
+- Both LR conditions always use the same `--task-schedule` and `--frequency-source`
+
 ## Open Issues for Phase 3c+ (continuation)
 
 1. Multi-task epoch loop: 1× repetition, 2× speaking, 3× comprehension per word per epoch `[Paper]`
 2. Frequency-weighted presentation rate `[Open — D16]`
-3. LR schedule: 0.5 (epochs 1–150) → stepwise decay → 0.1 (epochs 181–200) `[Paper]`
-4. Accuracy metric: proportion of words correct per epoch per task `[Inferred]`
-5. Phoneme coverage validation is already implemented (see `validate_phoneme_coverage()` in `encoding.py` and coverage tests). It should continue to be enforced before running full training experiments.
-6. Presentation order within epoch: fully random vs. task-blocked `[Open — D8]`
+3. Accuracy metric: proportion of words correct per epoch per task `[Inferred]`
+4. Phoneme coverage validation is already implemented (see `validate_phoneme_coverage()` in `encoding.py` and coverage tests). It should continue to be enforced before running full training experiments.
+5. Presentation order within epoch: fully random vs. task-blocked `[Open — D8]`
 
 ---
 
