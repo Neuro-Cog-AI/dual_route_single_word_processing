@@ -165,11 +165,14 @@ def run_diagnostic_epochs(
     device: torch.device,
     rng: random.Random,
     loss_reduction: str = "sum",
+    verbose: bool = True,
 ) -> DiagnosticResult:
     """Run diagnostic training loop and return structured statistics.
 
     Args:
         loss_reduction: "sum" (default) or "mean_active"; passed to train_step().
+        verbose:        if True (default), print a per-epoch summary line;
+                        set to False for silent operation (e.g. comparison scripts).
 
     Raises:
         RuntimeError: if any item loss is non-finite (nan or inf), with
@@ -206,7 +209,8 @@ def run_diagnostic_epochs(
             if epoch_losses[task]:
                 avg_t = sum(epoch_losses[task]) / len(epoch_losses[task])
                 line += f"  {task.name[:3]}={avg_t:.6f}"
-        print(line)
+        if verbose:
+            print(line)
 
         all_epoch_losses.append(epoch_losses)
 

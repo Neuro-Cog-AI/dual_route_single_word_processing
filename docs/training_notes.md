@@ -241,6 +241,36 @@ Passes `loss_reduction` through to `compute_trial_loss()` as a keyword argument.
 
 `run_diagnostic_epochs()` accepts `loss_reduction: str = "sum"` and passes it to each `train_step()` call. The print header includes `loss_reduction=...` for reproducibility.
 
+## Training Loop — Phase 3c-7 Implementation
+
+Phase 3c-7 adds a comparison script (`scripts/compare_loss_reductions.py`) that runs
+both loss reductions under strictly identical conditions.
+
+### Fairness guarantee in `run_comparison()`
+
+Items are loaded and sampled **once** before calling `run_comparison()`; both
+reductions share the same `trials` list. For each reduction in sequence:
+
+1. `torch.manual_seed(seed)` — identical model weight initialization
+2. `Lichtheim2Model(cfg)` — fresh model
+3. `random.Random(seed)` passed as `rng` — identical trial shuffle order every epoch
+
+Same `epochs`, `lr`, `zero_error_radius`, and `device` for both runs.
+
+### Interpreting the output
+
+The summary table reports initial, final, and best average loss plus best epoch.
+**Do not compare absolute loss values across reductions** — `sum` and `mean_active`
+operate on different scales. Use `% decrease = (initial_avg − final_avg) / initial_avg × 100`
+to compare training dynamics.
+
+### `verbose=False` in `run_diagnostic_epochs()`
+
+`run_diagnostic_epochs()` in `diagnose_small_subset_training.py` gained a
+`verbose: bool = True` parameter. Default is `True` → existing behavior unchanged.
+The compare script passes `verbose=False` to suppress per-epoch logs so only the
+final table is printed.
+
 ## Open Issues for Phase 3c+ (continuation)
 
 1. Multi-task epoch loop: 1× repetition, 2× speaking, 3× comprehension per word per epoch `[Paper]`
