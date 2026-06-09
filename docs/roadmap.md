@@ -211,7 +211,7 @@ Phase 3c is split into sub-steps:
 
 **Success criterion:** `build_word_trials_with_schedule` produces correct counts and order for both schedules; `run_schedule_comparison` returns finite losses for both; `trials_per_epoch["paper"] > trials_per_epoch["uniform"]`; always-run tests pass without CSV files; existing tests unaffected. ✓
 
-#### Phase 3c-9 — Frequency-Weighting Diagnostics — **In Progress**
+#### Phase 3c-9 — Frequency-Weighting Diagnostics — **Complete**
 
 **Goal:** Compare unweighted vs frequency-weighted training on small controlled subsets. Frequency weighting scales each trial's loss by a word-frequency-derived multiplier. This is an opt-in diagnostic; default behavior is unchanged throughout.
 
@@ -224,7 +224,21 @@ Phase 3c is split into sub-steps:
 
 **Key design decision:** `apply_weights_to_trials` guards by `label.startswith("word:")`, not by `item_id` alone. This prevents row-index collisions between word and pseudoword CSV sources from polluting pseudoword trial weights.
 
-**Success criterion:** `loss_weight=1.0` is numerically identical to no weighting; `loss_weight=2.0` gives ≈2× loss; `run_frequency_comparison` returns finite losses for both conditions; always-run tests pass without CSV files; existing tests unaffected.
+**Success criterion:** `loss_weight=1.0` is numerically identical to no weighting; `loss_weight=2.0` gives ≈2× loss; `run_frequency_comparison` returns finite losses for both conditions; always-run tests pass without CSV files; existing tests unaffected. ✓
+
+#### Phase 3c-10 — Learning-Rate Schedule Diagnostics — **In Progress**
+
+**Goal:** Compare constant vs paper-proportional LR schedule on small controlled subsets to determine whether LR scheduling improves learning stability.
+
+**Background:** The paper LR schedule (Ueno et al. 2011 `[Paper]`) is documented in `training_notes.md`: LR decays from 0.5 to 0.1 over epochs 1–200 in 4 step-down phases. Since the diagnostic typically runs for far fewer epochs, the schedule boundaries are **proportionally mapped** to `--epochs` so the comparison is always meaningful. For `--epochs 200 --lr 0.5`, the result is exactly the paper schedule.
+
+**Deliverables:**
+- `scripts/diagnose_small_subset_training.py`: `lr_schedule_fn` optional parameter added to `run_diagnostic_epochs()` (default `None`, backward-compatible); updates all optimizer param groups
+- `scripts/compare_lr_schedules.py`: `lr_for_epoch()`, `LRComparisonResult`, `run_lr_comparison()`, `print_lr_comparison_table()` (includes LR profile display). `--task-schedule paper|uniform`; `--frequency-source none|zipf|frequency`; default `--loss-reduction mean_active`
+- `tests/test_lr_schedule_diagnostics.py`: `lr_for_epoch` correctness tests (constant, paper phases, proportional 20-epoch, invalid), `run_lr_comparison` tests, `validate_args` tests, CSV-dependent integration test
+- `tests/test_small_subset_training_diagnostics.py`: 1 new test verifying `lr_schedule_fn` overrides optimizer LR
+
+**Success criterion:** `lr_for_epoch` returns correct values for all schedule phases; `run_lr_comparison` returns finite losses for both conditions; `lr_schedule_used["constant"]` entries all equal; `lr_schedule_used["paper"]` decays over 20 epochs; always-run tests pass without CSV files; existing tests unaffected.
 
 ---
 

@@ -219,6 +219,34 @@ def test_run_diagnostic_epochs_verbose_false_returns_finite():
     assert all(math.isfinite(a) for a in result.epoch_avgs)
 
 
+def test_run_diagnostic_epochs_lr_schedule_fn_applied():
+    """lr_schedule_fn overrides the optimizer LR at every epoch for all param groups."""
+    words   = [_mock_word("tank", 0)]
+    sem     = _sem_map(words)
+    trials  = build_trials_for_mode("words-multitask", words, [], sem, cfg.motor_output_size)
+
+    model = _toy_model()
+    initial_lr = 0.05
+    opt   = optim.SGD(model.parameters(), lr=initial_lr)
+
+    # Schedule that returns a fixed override LR different from initial_lr
+    override_lr = 0.0001
+    schedule_fn = lambda epoch: override_lr
+
+    run_diagnostic_epochs(
+        model, trials, opt, cfg,
+        epochs=2, zero_error_radius=0.0,
+        device=torch.device("cpu"), rng=random.Random(0),
+        verbose=False,
+        lr_schedule_fn=schedule_fn,
+    )
+    # After the loop, all param groups should reflect the last scheduled LR
+    for group in opt.param_groups:
+        assert abs(group["lr"] - override_lr) < 1e-12, (
+            f"Expected lr={override_lr}, got {group['lr']}"
+        )
+
+
 def test_run_diagnostic_epochs_mean_active_finite():
     """loss_reduction='mean_active' produces finite losses through run_diagnostic_epochs."""
     words   = [_mock_word("tank", 0), _mock_word("cat", 1)]
