@@ -150,7 +150,7 @@ Phase 3c is split into sub-steps:
 
 **Success criterion:** Script runs end-to-end with finite losses across all three task types; always-run tests pass without private CSV files; existing tests unaffected. ✓
 
-#### Phase 3c-4 — Small-Subset Training Stability Diagnostics — **In Progress**
+#### Phase 3c-4 — Small-Subset Training Stability Diagnostics — **Complete**
 
 **Goal:** Determine whether the model can learn stably on tiny controlled subsets before committing to paper-like schedules, frequency weighting, and full-scale training.
 
@@ -163,7 +163,18 @@ Phase 3c is split into sub-steps:
 - `scripts/diagnose_small_subset_training.py`: diagnostic script with `DiagnosticResult` dataclass, `sample_items()`, `build_word_rep_trials()`, `build_trials_for_mode()`, `run_diagnostic_epochs()`. Defaults: `--lr 0.01`, `--zero-error-radius 0.0`, `--epochs 20`, `--max-words 10`, `--max-pseudowords 10`. Non-finite loss raises `RuntimeError` with epoch/task/label context. Loads CSVs only as needed by mode.
 - `tests/test_small_subset_training_diagnostics.py`: always-run tests (mock dataclasses, toy config) + CSV-dependent integration tests
 
-**Success criterion:** Diagnostic script runs with finite losses for all modes; `DiagnosticResult` fields are correct; always-run tests pass without private CSV files; existing tests unaffected.
+**Success criterion:** Diagnostic script runs with finite losses for all modes; `DiagnosticResult` fields are correct; always-run tests pass without private CSV files; existing tests unaffected. ✓
+
+#### Phase 3c-5 — Loss Normalization and Task-Balance Audit — **In Progress**
+
+**Goal:** Expose per-component loss breakdown (motor vs semantic, total vs per-active-unit) before committing to paper schedules. Determine whether comprehension loss is large due to more active output elements, higher vATL dimensionality, or genuinely higher per-unit BCE.
+
+**Deliverables:**
+- `src/lichtheim2/losses.py`: `LossBreakdown` dataclass and `compute_trial_loss_breakdown()`; `compute_trial_loss()` refactored to delegate to it (interface and output unchanged)
+- `scripts/audit_loss_scaling.py`: CLI audit tool (no training; eval mode, `torch.no_grad()`) printing per-trial and per-task-summary breakdown tables
+- `tests/test_loss_scaling_audit.py`: parity tests, active-count tests, normalized-loss finiteness tests, dead-zone count-reduction tests
+
+**Success criterion:** `compute_trial_loss_breakdown().total_loss` numerically identical to `compute_trial_loss()`; active unit counts correct; normalized per-unit losses finite; always-run tests pass without private CSV files; existing tests unaffected.
 
 ---
 

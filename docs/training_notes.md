@@ -151,6 +151,57 @@ Key design decisions:
 - `DiagnosticResult` dataclass: `epoch_losses`, `epoch_avgs`, `initial_avg`, `final_avg`, `best_avg`, `best_epoch` (1-indexed). Allows tests to assert on specific statistics.
 - Safer defaults than pipeline-validation scripts: `--lr 0.01`, `--zero-error-radius 0.0` (no dead-zone, good for debugging), `--epochs 20`, `--max-words 10`, `--max-pseudowords 10`.
 
+## Training Loop — Phase 3c-5 Implementation
+
+Phase 3c-5 adds a loss breakdown utility and a standalone audit script.
+
+### `LossBreakdown` dataclass (`src/lichtheim2/losses.py`)
+
+Returned by `compute_trial_loss_breakdown()`. Fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `task` | `Task` | Task enum value |
+| `n_ticks` | `int` | Total ticks in trial |
+| `total_loss` | `Tensor` | Scalar, grad-capable |
+| `motor_loss` | `Tensor` | Scalar, grad-capable |
+| `semantic_loss` | `Tensor` | Zero for REP/SPK; grad-capable |
+| `n_active_motor` | `int` | Active (tick × unit) pairs for motor |
+| `n_active_semantic` | `int` | Active (tick × unit) pairs for semantic; 0 for REP/SPK |
+| `motor_loss_per_unit` | `float` | `motor_loss / n_active_motor`; `nan` if 0 |
+| `semantic_loss_per_unit` | `float` | `semantic_loss / n_active_semantic`; `nan` if 0 |
+
+"Active" means: tick's loss mask is True AND (if `zero_error_radius > 0`)
+the unit is outside the dead zone. This applies to ALL output elements
+regardless of target value — even zero-target units contribute to BCE unless
+excluded by the dead zone.
+
+`compute_trial_loss()` is refactored to call `compute_trial_loss_breakdown()`
+and return `.total_loss`. Interface and numerical output are unchanged.
+`compute_trial_loss_breakdown()` does not call `torch.no_grad()` internally —
+gradient flows through for training use. The audit script wraps calls in
+`torch.no_grad()` because it does not need gradients.
+
+### Expected active unit counts for English config (motor=39, vATL=50)
+
+| Task | Active motor units | Active semantic units | Total active |
+|---|---|---|---|
+| REPETITION | 2T × 39 = 78T | 0 | 78T |
+| COMPREHENSION | T × 39 = 39T | T × 50 = 50T | 89T |
+| SPEAKING | T × 39 = 39T | 0 | 39T |
+
+Interpretation: if `mot/unit ≈ sem/unit`, comprehension cost is explained
+by more active elements. If `sem/unit >> mot/unit`, semantic targets are
+genuinely harder to learn — expected early in training when vATL output is
+far from the binary semantic target.
+
+### Audit script (`scripts/audit_loss_scaling.py`)
+
+Runs in eval mode with `torch.no_grad()`. No optimizer, no gradient step.
+Prints a per-trial breakdown table and per-task summary (mean over N words).
+CLI: `--data-dir`, `--config`, `--max-words` (default 5), `--seed`, `--device`
+(with same CUDA/MPS validation as other scripts), `--zero-error-radius`.
+
 ## Open Issues for Phase 3c+ (continuation)
 
 1. Multi-task epoch loop: 1× repetition, 2× speaking, 3× comprehension per word per epoch `[Paper]`
