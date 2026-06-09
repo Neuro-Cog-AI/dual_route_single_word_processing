@@ -165,7 +165,7 @@ Phase 3c is split into sub-steps:
 
 **Success criterion:** Diagnostic script runs with finite losses for all modes; `DiagnosticResult` fields are correct; always-run tests pass without private CSV files; existing tests unaffected. ✓
 
-#### Phase 3c-5 — Loss Normalization and Task-Balance Audit — **In Progress**
+#### Phase 3c-5 — Loss Normalization and Task-Balance Audit — **Complete**
 
 **Goal:** Expose per-component loss breakdown (motor vs semantic, total vs per-active-unit) before committing to paper schedules. Determine whether comprehension loss is large due to more active output elements, higher vATL dimensionality, or genuinely higher per-unit BCE.
 
@@ -174,7 +174,20 @@ Phase 3c is split into sub-steps:
 - `scripts/audit_loss_scaling.py`: CLI audit tool (no training; eval mode, `torch.no_grad()`) printing per-trial and per-task-summary breakdown tables
 - `tests/test_loss_scaling_audit.py`: parity tests, active-count tests, normalized-loss finiteness tests, dead-zone count-reduction tests
 
-**Success criterion:** `compute_trial_loss_breakdown().total_loss` numerically identical to `compute_trial_loss()`; active unit counts correct; normalized per-unit losses finite; always-run tests pass without private CSV files; existing tests unaffected.
+**Success criterion:** `compute_trial_loss_breakdown().total_loss` numerically identical to `compute_trial_loss()`; active unit counts correct; normalized per-unit losses finite; always-run tests pass without private CSV files; existing tests unaffected. ✓
+
+#### Phase 3c-6 — Optional Loss Reduction Modes — **In Progress**
+
+**Goal:** Add a `mean_active` loss reduction option for small-subset diagnostics. Keeps `sum` as the default (paper behavior); `mean_active` normalizes by the number of active output elements to diagnose task imbalance.
+
+**Deliverables:**
+- `src/lichtheim2/losses.py`: `loss_reduction` parameter added to `compute_trial_loss()` (`"sum"` default, `"mean_active"` option); raises `ValueError` for unknown values or zero active elements
+- `src/lichtheim2/trainer.py`: `loss_reduction` parameter added to `train_step()`; passed as keyword arg to `compute_trial_loss()`
+- `scripts/diagnose_small_subset_training.py`: `--loss-reduction sum|mean_active` CLI argument (default `sum`); threaded through `run_diagnostic_epochs()`
+- `tests/test_training_loop.py`: parity test (`sum` == default), `mean_active` value/finiteness tests, dead-zone interaction test, invalid-string error test, `train_step` with `mean_active`
+- `tests/test_small_subset_training_diagnostics.py`: `run_diagnostic_epochs` with `loss_reduction="mean_active"` stays finite
+
+**Success criterion:** `loss_reduction="sum"` is bit-for-bit identical to previous default; `mean_active` = `total_loss / n_active`; dead-zone interaction correct; invalid string raises `ValueError`; always-run tests pass without CSV files; existing tests unaffected.
 
 ---
 

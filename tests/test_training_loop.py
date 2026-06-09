@@ -5,11 +5,12 @@ No CSV files or private data required.
 """
 from pathlib import Path
 
+import pytest
 import torch
 import torch.optim as optim
 
 from lichtheim2.config import load_config
-from lichtheim2.losses import compute_trial_loss
+from lichtheim2.losses import compute_trial_loss, compute_trial_loss_breakdown
 from lichtheim2.model import Lichtheim2Model
 from lichtheim2.trainer import move_trial_to_device, train_step
 from lichtheim2.trials import (
@@ -213,3 +214,75 @@ def test_move_trial_preserves_values():
     moved = move_trial_to_device(trial, "cpu")
     assert torch.allclose(moved.phon_tensor, trial.phon_tensor)
     assert torch.allclose(moved.motor_targets, trial.motor_targets)
+
+
+# ---------------------------------------------------------------------------
+# loss_reduction parameter
+# ---------------------------------------------------------------------------
+
+
+def test_compute_loss_sum_matches_default():
+    """loss_reduction='sum' must be bit-for-bit identical to the default (no arg)."""
+    model   = _fresh_model()
+    trial   = make_repetition_trial(PHON, MOTOR_SIZE)
+    results = model.run_trial(trial.task, trial.phon_tensor, torch.zeros(VATL_SIZE), cfg)
+    assert torch.equal(
+        compute_trial_loss(results, trial),
+        compute_trial_loss(results, trial, loss_reduction="sum"),
+    )
+
+
+def test_compute_loss_mean_active_finite():
+    model   = _fresh_model()
+    trial   = make_repetition_trial(PHON, MOTOR_SIZE)
+    results = model.run_trial(trial.task, trial.phon_tensor, torch.zeros(VATL_SIZE), cfg)
+    loss    = compute_trial_loss(results, trial, loss_reduction="mean_active")
+    assert loss.shape == ()
+    assert torch.isfinite(loss)
+
+
+def test_compute_loss_mean_active_value():
+    """mean_active == total_loss / (n_active_motor + n_active_semantic)."""
+    model   = _fresh_model()
+    trial   = make_comprehension_trial(PHON, SEM, MOTOR_SIZE)
+    results = model.run_trial(trial.task, trial.phon_tensor, torch.zeros(VATL_SIZE), cfg)
+    bd      = compute_trial_loss_breakdown(results, trial)
+    n_active = bd.n_active_motor + bd.n_active_semantic
+    assert torch.isclose(
+        compute_trial_loss(results, trial, loss_reduction="mean_active"),
+        bd.total_loss / n_active,
+    )
+
+
+def test_compute_loss_mean_active_with_zero_error_radius():
+    """mean_active with dead zone uses post-dead-zone active count, not the full count."""
+    model   = _fresh_model()
+    trial   = make_comprehension_trial(PHON, SEM, MOTOR_SIZE)
+    results = model.run_trial(trial.task, trial.phon_tensor, torch.zeros(VATL_SIZE), cfg)
+    bd      = compute_trial_loss_breakdown(results, trial, zero_error_radius=0.1)
+    n_active = bd.n_active_motor + bd.n_active_semantic
+    # n_active may be 0 if all units fall in dead zone; skip in that case
+    if n_active == 0:
+        pytest.skip("all units in dead zone — no active elements to normalize")
+    expected = bd.total_loss / n_active
+    actual   = compute_trial_loss(results, trial, zero_error_radius=0.1, loss_reduction="mean_active")
+    assert torch.isclose(actual, expected)
+
+
+def test_compute_loss_invalid_reduction_raises():
+    model   = _fresh_model()
+    trial   = make_repetition_trial(PHON, MOTOR_SIZE)
+    results = model.run_trial(trial.task, trial.phon_tensor, torch.zeros(VATL_SIZE), cfg)
+    with pytest.raises(ValueError, match="loss_reduction"):
+        compute_trial_loss(results, trial, loss_reduction="invalid")
+
+
+def test_train_step_mean_active_updates_parameters():
+    model  = _fresh_model()
+    before = [p.clone() for p in model.parameters()]
+    trial  = make_repetition_trial(PHON, MOTOR_SIZE)
+    opt    = optim.SGD(model.parameters(), lr=0.5)
+    train_step(model, trial, opt, cfg, loss_reduction="mean_active")
+    after   = list(model.parameters())
+    changed = any(not torch.equal(b, a) for b, a in zip(before, after))
+    assert changed, "at least one parameter must change after a training step with mean_active"
