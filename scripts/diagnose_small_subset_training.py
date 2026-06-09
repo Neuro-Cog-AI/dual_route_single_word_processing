@@ -164,8 +164,12 @@ def run_diagnostic_epochs(
     zero_error_radius: float,
     device: torch.device,
     rng: random.Random,
+    loss_reduction: str = "sum",
 ) -> DiagnosticResult:
     """Run diagnostic training loop and return structured statistics.
+
+    Args:
+        loss_reduction: "sum" (default) or "mean_active"; passed to train_step().
 
     Raises:
         RuntimeError: if any item loss is non-finite (nan or inf), with
@@ -184,6 +188,7 @@ def run_diagnostic_epochs(
                 model, trial, optimizer, cfg,
                 zero_error_radius=zero_error_radius,
                 device=device,
+                loss_reduction=loss_reduction,
             )
             if not math.isfinite(loss):
                 raise RuntimeError(
@@ -244,6 +249,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--zero-error-radius", type=float, default=0.0,
                    dest="zero_error_radius",
                    help="0.0 = no dead-zone (default, good for debugging).")
+    p.add_argument("--loss-reduction",    type=str,   default="sum",
+                   dest="loss_reduction",
+                   choices=["sum", "mean_active"],
+                   help="Loss reduction: 'sum' (default) or 'mean_active'.")
     return p.parse_args(argv)
 
 
@@ -332,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
         f"Config: sound={cfg.sound_input_size}  "
         f"motor={cfg.motor_output_size}  vATL={cfg.vATL_size}"
     )
-    print(f"lr={args.lr}  zero_error_radius={args.zero_error_radius}  epochs={args.epochs}")
+    print(f"lr={args.lr}  zero_error_radius={args.zero_error_radius}  epochs={args.epochs}  loss_reduction={args.loss_reduction}")
 
     try:
         result = run_diagnostic_epochs(
@@ -341,6 +350,7 @@ def main(argv: list[str] | None = None) -> int:
             zero_error_radius=args.zero_error_radius,
             device=device,
             rng=rng,
+            loss_reduction=args.loss_reduction,
         )
     except RuntimeError as exc:
         print(f"Error: {exc}", file=sys.stderr)

@@ -38,6 +38,7 @@ def train_step(
     cfg: "ModelConfig",
     zero_error_radius: float = 0.0,
     device: torch.device | str = "cpu",
+    loss_reduction: str = "sum",
 ) -> float:
     """Perform one online (item-by-item) training step.
 
@@ -50,6 +51,8 @@ def train_step(
         cfg:                ModelConfig used to construct the model
         zero_error_radius:  dead-zone threshold for loss masking (default 0.0)
         device:             device to run on; tests use "cpu"
+        loss_reduction:     "sum" (default) or "mean_active"; passed to
+                            compute_trial_loss()
 
     Returns:
         Scalar loss as a Python float (detached, for logging).
@@ -77,7 +80,11 @@ def train_step(
     )
 
     # Compute loss
-    loss = compute_trial_loss(tick_results, trial_dev, zero_error_radius)
+    loss = compute_trial_loss(
+        tick_results, trial_dev,
+        zero_error_radius=zero_error_radius,
+        loss_reduction=loss_reduction,
+    )
 
     # Backward + update
     loss.backward()

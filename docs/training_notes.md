@@ -202,6 +202,45 @@ Prints a per-trial breakdown table and per-task summary (mean over N words).
 CLI: `--data-dir`, `--config`, `--max-words` (default 5), `--seed`, `--device`
 (with same CUDA/MPS validation as other scripts), `--zero-error-radius`.
 
+## Training Loop — Phase 3c-6 Implementation
+
+Phase 3c-6 adds an optional `loss_reduction` parameter to the core loss functions and the diagnostic script.
+
+### `compute_trial_loss()` — `loss_reduction` parameter
+
+```python
+compute_trial_loss(tick_results, trial, zero_error_radius=0.0, loss_reduction="sum")
+```
+
+| Value | Behavior |
+|---|---|
+| `"sum"` | Returns `breakdown.total_loss` — unchanged from Phase 3c-5. Default. Preserves existing behavior exactly. |
+| `"mean_active"` | Returns `breakdown.total_loss / (n_active_motor + n_active_semantic)`. For diagnostics only. |
+
+Raises `ValueError` if `loss_reduction` is any other string, or if `mean_active` is used and `n_active == 0` (all elements masked or in dead zone).
+
+`compute_trial_loss_breakdown()` is unchanged and gradient-compatible. Division by `n_active` (a Python int) preserves gradient flow through `total_loss`.
+
+### When to use `mean_active`
+
+`mean_active` is intended for small-subset stability diagnostics where task imbalance (comprehension has more active elements than speaking/repetition) makes raw summed loss comparisons misleading. It is **not** yet adopted as the paper training objective.
+
+### `train_step()` — `loss_reduction` parameter
+
+```python
+train_step(model, trial, optimizer, cfg, zero_error_radius=0.0, device="cpu", loss_reduction="sum")
+```
+
+Passes `loss_reduction` through to `compute_trial_loss()` as a keyword argument.
+
+### `diagnose_small_subset_training.py` — `--loss-reduction` CLI option
+
+```
+--loss-reduction sum|mean_active   (default: sum)
+```
+
+`run_diagnostic_epochs()` accepts `loss_reduction: str = "sum"` and passes it to each `train_step()` call. The print header includes `loss_reduction=...` for reproducibility.
+
 ## Open Issues for Phase 3c+ (continuation)
 
 1. Multi-task epoch loop: 1× repetition, 2× speaking, 3× comprehension per word per epoch `[Paper]`

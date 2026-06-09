@@ -199,6 +199,27 @@ def test_run_diagnostic_epochs_finite():
             assert all(math.isfinite(l) for l in task_losses)
 
 
+def test_run_diagnostic_epochs_mean_active_finite():
+    """loss_reduction='mean_active' produces finite losses through run_diagnostic_epochs."""
+    words   = [_mock_word("tank", 0), _mock_word("cat", 1)]
+    pseudos = [_mock_pseudo(0), _mock_pseudo(1)]
+    sem     = _sem_map(words)
+    trials  = build_trials_for_mode("mixed-multitask", words, pseudos, sem, cfg.motor_output_size)
+
+    model  = _toy_model()
+    opt    = optim.SGD(model.parameters(), lr=0.01)
+    rng    = random.Random(0)
+    result = run_diagnostic_epochs(
+        model, trials, opt, cfg,
+        epochs=2, zero_error_radius=0.0,
+        device=torch.device("cpu"), rng=rng,
+        loss_reduction="mean_active",
+    )
+    for ep in result.epoch_losses:
+        for task_losses in ep.values():
+            assert all(math.isfinite(l) for l in task_losses)
+
+
 def test_diagnostic_result_fields_present():
     words  = [_mock_word("tank", 0)]
     sem    = _sem_map(words)

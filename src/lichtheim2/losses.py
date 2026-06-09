@@ -125,6 +125,7 @@ def compute_trial_loss(
     tick_results: list["TickResult"],
     trial: "SupervisedTrial",
     zero_error_radius: float = 0.0,
+    loss_reduction: str = "sum",
 ) -> torch.Tensor:
     """Compute combined motor + semantic binary cross-entropy loss for one trial.
 
@@ -142,12 +143,38 @@ def compute_trial_loss(
       semantic losses. Default 0.0 = standard BCE with no dead zone.
       From the paper: zero_error_radius = 0.1 [Paper].
 
+    Loss reduction:
+      "sum" (default): returns the total summed BCE loss. This preserves the
+        existing training behavior exactly and is the paper default.
+      "mean_active": divides total_loss by (n_active_motor + n_active_semantic),
+        the count of output elements that actually contributed to the loss after
+        applying the tick mask and dead zone. Intended for diagnostic comparisons
+        across tasks — NOT yet adopted as the default training objective.
+      Any other value raises ValueError.
+      Raises ValueError if loss_reduction="mean_active" and all elements are
+      masked or in the dead zone (n_active == 0).
+
     Args:
         tick_results:       list of TickResult from model.run_trial()
         trial:              SupervisedTrial with targets and masks
         zero_error_radius:  dead-zone threshold; 0.0 disables it
+        loss_reduction:     "sum" (default) or "mean_active"
 
     Returns:
         Scalar tensor with .requires_grad=True (gradient flows back to model params).
     """
-    return compute_trial_loss_breakdown(tick_results, trial, zero_error_radius).total_loss
+    breakdown = compute_trial_loss_breakdown(tick_results, trial, zero_error_radius)
+    if loss_reduction == "sum":
+        return breakdown.total_loss
+    elif loss_reduction == "mean_active":
+        n_active = breakdown.n_active_motor + breakdown.n_active_semantic
+        if n_active == 0:
+            raise ValueError(
+                "loss_reduction='mean_active': n_active_motor + n_active_semantic == 0; "
+                "cannot normalize — all output elements are masked or in the dead zone"
+            )
+        return breakdown.total_loss / n_active
+    else:
+        raise ValueError(
+            f"Unknown loss_reduction: {loss_reduction!r}; expected 'sum' or 'mean_active'"
+        )
