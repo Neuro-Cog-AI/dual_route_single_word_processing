@@ -36,6 +36,7 @@ class SupervisedTrial:
     # Optional metadata for debugging / logging
     item_id: int | None = None
     label: str | None = None
+    loss_weight: float = 1.0  # scalar multiplier on the loss; 1.0 = unweighted (default)
 
 
 def make_repetition_trial(

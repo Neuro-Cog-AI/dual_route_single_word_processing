@@ -86,6 +86,10 @@ def train_step(
         loss_reduction=loss_reduction,
     )
 
+    # Apply frequency weight if non-default (avoids touching the computation graph for weight=1.0)
+    if trial_dev.loss_weight != 1.0:
+        loss = loss * trial_dev.loss_weight
+
     # Backward + update
     loss.backward()
     optimizer.step()

@@ -286,3 +286,47 @@ def test_train_step_mean_active_updates_parameters():
     after   = list(model.parameters())
     changed = any(not torch.equal(b, a) for b, a in zip(before, after))
     assert changed, "at least one parameter must change after a training step with mean_active"
+
+
+# ---------------------------------------------------------------------------
+# loss_weight field on SupervisedTrial
+# ---------------------------------------------------------------------------
+
+
+def test_trial_loss_weight_default_is_one():
+    trial = make_repetition_trial(PHON, MOTOR_SIZE)
+    assert trial.loss_weight == 1.0
+
+
+def test_train_step_weight_one_matches_default():
+    """Explicit loss_weight=1.0 gives the same returned loss as the unmodified default."""
+    from dataclasses import replace as dc_replace
+    model1    = _fresh_model()
+    model2    = _fresh_model()
+    trial     = make_repetition_trial(PHON, MOTOR_SIZE)
+    trial_w1  = dc_replace(trial, loss_weight=1.0)
+    # lr=0.0 keeps parameters frozen so both runs use identical weights
+    opt1 = optim.SGD(model1.parameters(), lr=0.0)
+    opt2 = optim.SGD(model2.parameters(), lr=0.0)
+    loss1 = train_step(model1, trial,    opt1, cfg)
+    loss2 = train_step(model2, trial_w1, opt2, cfg)
+    assert abs(loss1 - loss2) < 1e-7, (
+        f"Explicit weight=1.0 must give same loss as default: {loss1} vs {loss2}"
+    )
+
+
+def test_train_step_weight_scales_loss():
+    """loss_weight=2.0 returns approximately 2× the loss of loss_weight=1.0."""
+    from dataclasses import replace as dc_replace
+    model1   = _fresh_model()
+    model2   = _fresh_model()
+    trial    = make_repetition_trial(PHON, MOTOR_SIZE)
+    trial_w2 = dc_replace(trial, loss_weight=2.0)
+    # lr=0.0 keeps parameters frozen; train_step returns the pre-step loss value
+    opt1 = optim.SGD(model1.parameters(), lr=0.0)
+    opt2 = optim.SGD(model2.parameters(), lr=0.0)
+    loss1 = train_step(model1, trial,    opt1, cfg)
+    loss2 = train_step(model2, trial_w2, opt2, cfg)
+    assert abs(loss2 - 2.0 * loss1) < 1e-5, (
+        f"Expected loss2 ≈ 2×loss1: {loss2:.6f} vs 2×{loss1:.6f}={2*loss1:.6f}"
+    )

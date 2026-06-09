@@ -311,6 +311,67 @@ Default `--loss-reduction mean_active` (unlike other scripts that default to `su
 because normalising by active elements is more informative when comparing schedules
 with different trial-per-epoch counts.
 
+## Training Loop — Phase 3c-9 Implementation
+
+Phase 3c-9 adds optional frequency weighting as an opt-in diagnostic. Default behavior is unchanged.
+
+### `loss_weight` field on `SupervisedTrial`
+
+```python
+loss_weight: float = 1.0  # scalar multiplier on the loss; 1.0 = unweighted (default)
+```
+
+All existing `make_*_trial()` calls produce `loss_weight=1.0`. `move_trial_to_device` via `dc_replace` preserves the field automatically (it is a float, not a tensor).
+
+### `train_step()` — weight multiply
+
+```python
+if trial_dev.loss_weight != 1.0:
+    loss = loss * trial_dev.loss_weight
+```
+
+The conditional avoids touching the computation graph when `loss_weight=1.0`. When weight=1.0, `train_step` is numerically identical to the Phase 3c-6 behaviour.
+
+### `compute_word_weights(word_items, frequency_source, normalization)` → `dict[int, float]`
+
+| `frequency_source` | Transform |
+|---|---|
+| `"zipf"` (default) | `WordItem.zipf_frequency` as-is |
+| `"frequency"` | `math.log1p(WordItem.frequency)` (handles zero and right-skewed raw counts) |
+
+Normalisation (`normalization="mean_one"`): `weight_i = value_i / mean(positive_values)`.
+- Words with `None` or non-positive transformed frequency → weight 1.0.
+- If no words have usable frequency data, all weights default to 1.0.
+
+Returns `dict[row_index → weight]`.
+
+### `apply_weights_to_trials(trials, weight_map)` → `list[SupervisedTrial]`
+
+Only trials whose `label.startswith("word:")` receive weights from `weight_map`.
+All other trials (pseudowords, unlabelled) keep `loss_weight=1.0`.
+
+**Why the label guard matters:** `word_items` (wfe.csv) and `PseudowordItems` (ssp.csv)
+are loaded from separate files and may have overlapping `row_index` values. Guarding on
+`label.startswith("word:")` prevents incorrect weight assignment when a pseudoword
+happens to share a `row_index` with a word in `weight_map`.
+
+### Fairness guarantee in `run_frequency_comparison()`
+
+- Base trials are built once; "unweighted" uses them as-is; "weighted" applies `apply_weights_to_trials`.
+- Per condition: `torch.manual_seed(seed)` + `random.Random(seed)` for identical initialisation and shuffle.
+- Same `schedule`, `epochs`, `lr`, `zero_error_radius`, `device`, `loss_reduction`.
+- `verbose=False`.
+
+### Interpreting the output
+
+The "weighted" initial avg may differ from "unweighted" because `train_step()` returns
+the weighted loss value. **Compare `% decrease` within each condition, not absolute
+loss values across conditions.** Weight stats (min, mean, max) are printed before the
+table to aid interpretation.
+
+Default `--loss-reduction mean_active` (same as Phase 3c-8) because normalised loss
+is more informative for schedule/weight comparisons.
+
 ## Open Issues for Phase 3c+ (continuation)
 
 1. Multi-task epoch loop: 1× repetition, 2× speaking, 3× comprehension per word per epoch `[Paper]`
