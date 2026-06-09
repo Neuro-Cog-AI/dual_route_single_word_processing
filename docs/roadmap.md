@@ -201,7 +201,7 @@ Phase 3c is split into sub-steps:
 
 **Success criterion:** `run_comparison()` returns `DiagnosticResult` for both reductions with identical epoch counts and finite losses; `verbose=False` path tested; always-run tests pass without CSV files; existing tests unaffected. ✓
 
-#### Phase 3c-8 — Task Schedule Diagnostics — **In Progress**
+#### Phase 3c-8 — Task Schedule Diagnostics — **Complete**
 
 **Goal:** Compare the uniform (1×REP+1×COMP+1×SPK) and paper-like (1×REP+3×COMP+2×SPK) task presentation schedules on small controlled subsets to understand how schedule affects learning dynamics before committing to the paper schedule.
 
@@ -209,7 +209,22 @@ Phase 3c is split into sub-steps:
 - `scripts/compare_task_schedules.py`: `SCHEDULES` dict, `ScheduleComparisonResult`, `build_word_trials_with_schedule()`, `build_trials_for_schedule()`, `run_schedule_comparison()` (same fairness guarantee as Phase 3c-7), `print_schedule_comparison_table()` (summary + per-task initial→final losses). Default `--loss-reduction mean_active`.
 - `tests/test_task_schedule_diagnostics.py`: trial count/order tests, mode-aware builder tests, comparison result tests, `validate_args` tests, CSV-dependent integration test
 
-**Success criterion:** `build_word_trials_with_schedule` produces correct counts and order for both schedules; `run_schedule_comparison` returns finite losses for both; `trials_per_epoch["paper"] > trials_per_epoch["uniform"]`; always-run tests pass without CSV files; existing tests unaffected.
+**Success criterion:** `build_word_trials_with_schedule` produces correct counts and order for both schedules; `run_schedule_comparison` returns finite losses for both; `trials_per_epoch["paper"] > trials_per_epoch["uniform"]`; always-run tests pass without CSV files; existing tests unaffected. ✓
+
+#### Phase 3c-9 — Frequency-Weighting Diagnostics — **In Progress**
+
+**Goal:** Compare unweighted vs frequency-weighted training on small controlled subsets. Frequency weighting scales each trial's loss by a word-frequency-derived multiplier. This is an opt-in diagnostic; default behavior is unchanged throughout.
+
+**Deliverables:**
+- `src/lichtheim2/trials.py`: `loss_weight: float = 1.0` added to `SupervisedTrial` (backward-compatible)
+- `src/lichtheim2/trainer.py`: conditional weight multiply in `train_step()` (`if trial_dev.loss_weight != 1.0: loss = loss * trial_dev.loss_weight`)
+- `scripts/compare_frequency_weighting.py`: `compute_word_weights()`, `apply_weights_to_trials()`, `FrequencyComparisonResult`, `run_frequency_comparison()`, `print_frequency_comparison_table()`. Supports `--frequency-source zipf|frequency` and `--weight-normalization mean_one`. Default `--loss-reduction mean_active`.
+- `tests/test_training_loop.py`: 3 new `loss_weight` tests (default is 1.0, explicit 1.0 matches, 2.0 gives 2× loss)
+- `tests/test_frequency_weighting_diagnostics.py`: weight computation tests, `apply_weights_to_trials` tests (including label-based pseudoword guard), `run_frequency_comparison` tests, `validate_args` tests, CSV-dependent integration test
+
+**Key design decision:** `apply_weights_to_trials` guards by `label.startswith("word:")`, not by `item_id` alone. This prevents row-index collisions between word and pseudoword CSV sources from polluting pseudoword trial weights.
+
+**Success criterion:** `loss_weight=1.0` is numerically identical to no weighting; `loss_weight=2.0` gives ≈2× loss; `run_frequency_comparison` returns finite losses for both conditions; always-run tests pass without CSV files; existing tests unaffected.
 
 ---
 
