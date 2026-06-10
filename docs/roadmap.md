@@ -226,7 +226,7 @@ Phase 3c is split into sub-steps:
 
 **Success criterion:** `loss_weight=1.0` is numerically identical to no weighting; `loss_weight=2.0` gives ≈2× loss; `run_frequency_comparison` returns finite losses for both conditions; always-run tests pass without CSV files; existing tests unaffected. ✓
 
-#### Phase 3c-10 — Learning-Rate Schedule Diagnostics — **In Progress**
+#### Phase 3c-10 — Learning-Rate Schedule Diagnostics — **Complete**
 
 **Goal:** Compare constant vs paper-proportional LR schedule on small controlled subsets to determine whether LR scheduling improves learning stability.
 
@@ -238,7 +238,19 @@ Phase 3c is split into sub-steps:
 - `tests/test_lr_schedule_diagnostics.py`: `lr_for_epoch` correctness tests (constant, paper phases, proportional 20-epoch, invalid), `run_lr_comparison` tests, `validate_args` tests, CSV-dependent integration test
 - `tests/test_small_subset_training_diagnostics.py`: 1 new test verifying `lr_schedule_fn` overrides optimizer LR
 
-**Success criterion:** `lr_for_epoch` returns correct values for all schedule phases; `run_lr_comparison` returns finite losses for both conditions; `lr_schedule_used["constant"]` entries all equal; `lr_schedule_used["paper"]` decays over 20 epochs; always-run tests pass without CSV files; existing tests unaffected.
+**Success criterion:** `lr_for_epoch` returns correct values for all schedule phases; `run_lr_comparison` returns finite losses for both conditions; `lr_schedule_used["constant"]` entries all equal; `lr_schedule_used["paper"]` decays over 20 epochs; always-run tests pass without CSV files; existing tests unaffected. ✓
+
+#### Phase 3c-11 — Integrated Training Recipe Diagnostics — **Complete**
+
+**Goal:** Compare a small set of *integrated* training recipes — fixed combinations of the four dimensions explored in isolation in Phases 3c-8 through 3c-10 (task schedule, loss reduction, frequency weighting, LR schedule) — under identical conditions, to check whether these choices combine sensibly. No new training mechanics are introduced; this phase only adds a comparison script that reuses existing helpers.
+
+**Recipes:** `baseline_constant`, `frequency_constant`, `frequency_paper_lr` (the main comparison, all `task_schedule="paper"`, `loss_reduction="mean_active"`); `zipf_constant` is an additional, optional control recipe.
+
+**Deliverables:**
+- `scripts/compare_training_recipes.py`: `RecipeConfig` (frozen dataclass), `RECIPES` registry, `validate_recipe_config()`, `RecipeComparisonResult`, `run_recipe_comparison()` (caches base trials by `task_schedule` and frequency weight maps by `frequency_source`; fresh model/optimizer/rng per recipe with the same seed), `print_recipe_comparison_table()` (summary table + final per-task training losses, with a caveat that frequency-weighted recipes report *weighted* training losses)
+- `tests/test_training_recipe_diagnostics.py`: `RECIPES` / `validate_recipe_config` tests, `run_recipe_comparison` tests (toy data, finite losses, matching epoch counts, subset selection), invalid-recipe-config error test, `validate_args` tests, CSV-dependent integration test
+
+**Success criterion:** All recipes in `RECIPES` return finite losses with matching epoch counts on toy data; an invalid recipe configuration raises a `ValueError` naming the offending recipe and field; always-run tests pass without CSV files; existing tests unaffected. Implementation, tests, and a smoke run against real data have been validated. ✓
 
 ---
 
