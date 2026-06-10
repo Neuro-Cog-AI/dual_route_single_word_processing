@@ -442,6 +442,93 @@ class LRComparisonResult:
 - Default `--loss-reduction mean_active`
 - Both LR conditions always use the same `--task-schedule` and `--frequency-source`
 
+## Training Loop — Phase 3c-11 Implementation
+
+Phase 3c-11 adds `scripts/compare_training_recipes.py`, which compares small,
+named "recipes" — fixed combinations of the four dimensions explored separately in
+Phases 3c-8 through 3c-10 — under identical conditions. No new training mechanics
+are introduced; everything reuses helpers from `compare_task_schedules`,
+`compare_frequency_weighting`, `compare_lr_schedules`, and
+`diagnose_small_subset_training`.
+
+### `RecipeConfig` / `RECIPES`
+
+```python
+@dataclass(frozen=True)
+class RecipeConfig:
+    name: str
+    task_schedule: str       # "uniform" | "paper"
+    loss_reduction: str      # "sum" | "mean_active"
+    frequency_source: str    # "none" | "zipf" | "frequency"
+    lr_schedule: str         # "constant" | "paper"
+```
+
+| Recipe | task_schedule | loss_reduction | frequency_source | lr_schedule |
+|---|---|---|---|---|
+| `baseline_constant`  | paper | mean_active | none      | constant |
+| `frequency_constant` | paper | mean_active | frequency | constant |
+| `frequency_paper_lr` | paper | mean_active | frequency | paper    |
+| `zipf_constant`      | paper | mean_active | zipf      | constant |
+
+`baseline_constant`, `frequency_constant`, and `frequency_paper_lr` are the **main
+comparison** (and the default `--recipes` selection). `zipf_constant` is an
+**optional control recipe** — it is defined in `RECIPES` and exercised by the test
+suite, but must be requested explicitly via `--recipes` to appear in a run.
+
+### `validate_recipe_config(recipe)` → `str | None`
+
+Checks `task_schedule in SCHEDULES`, `loss_reduction in ("sum", "mean_active")`,
+`frequency_source in ("none", "zipf", "frequency")`, `lr_schedule in ("constant", "paper")`.
+`run_recipe_comparison` validates every recipe up front and raises
+`ValueError(f"Invalid recipe {name!r}: {err}")` naming the offending recipe and field
+on the first failure.
+
+### Fairness guarantee in `run_recipe_comparison()`
+
+- `word_items`, `pseudo_items`, `sem_map` are loaded/sampled once before comparison.
+- Base trials are built **once per distinct `task_schedule`** (cache) via
+  `build_trials_for_schedule`, so recipes sharing a task schedule start from the same
+  base trial list before any recipe-specific weighting is applied.
+- Frequency weight maps are built **once per distinct `frequency_source`** (cache) via
+  `compute_word_weights`.
+- Per recipe: `torch.manual_seed(seed)` → fresh `Lichtheim2Model`; fresh
+  `optim.SGD(lr=base_lr)`; `random.Random(seed)` → rng. Only the recipe's own
+  `task_schedule` / `loss_reduction` / `frequency_source` / `lr_schedule` vary.
+- `lr_schedule_fn = lambda ep, r=recipe: lr_for_epoch(base_lr, ep, r.lr_schedule, epochs)`
+  is passed to `run_diagnostic_epochs(..., loss_reduction=recipe.loss_reduction,
+  lr_schedule_fn=schedule_fn, verbose=False)`.
+
+### Interpreting the output
+
+`print_recipe_comparison_table()` prints, in order:
+1. Frequency weight stats (min/mean/max/n_words) for any recipe with
+   `frequency_source != "none"`.
+2. A summary table — recipe, task schedule, frequency source, LR schedule,
+   trials/epoch, initial/final/best avg loss, best epoch, `% decrease`.
+3. A "final per-task training losses" table (REP / COMP / SPK, final epoch).
+
+As in Phase 3c-9, **absolute losses are not directly comparable** across recipes with
+different `frequency_source` or `trials_per_epoch`; compare `% decrease` instead.
+
+**Important caveat on per-task losses:** the per-task values come straight from
+`train_step()`'s returned loss, *not* from a separate unweighted evaluation pass. For
+recipes with `frequency_source != "none"`, `train_step()` records the **weighted**
+loss. Therefore the printed per-task losses are weighted training losses, not
+unweighted evaluation losses; unweighted evaluation metrics will be added later.
+
+### Smoke run observations
+
+A validated smoke run (`--mode mixed-multitask --max-words 10 --max-pseudowords 10
+--epochs 20 --lr 0.01 --device cpu --seed 0`) over the default `--recipes
+baseline_constant frequency_constant frequency_paper_lr` showed:
+
+- `baseline_constant` and `frequency_constant` behaved similarly over 20 epochs.
+- `frequency_paper_lr` was slightly slower to decrease loss on this short diagnostic,
+  consistent with its LR decay reducing the effective step size in the later epochs.
+- As noted above, reported losses for frequency-weighted recipes (`frequency_constant`,
+  `frequency_paper_lr`) remain **weighted training losses**, not unweighted evaluation
+  metrics — differences should be interpreted with that in mind.
+
 ## Open Issues for Phase 3c+ (continuation)
 
 1. Multi-task epoch loop: 1× repetition, 2× speaking, 3× comprehension per word per epoch `[Paper]`
