@@ -451,6 +451,24 @@ paper and might not replicate the paper's training dynamics. This is a
 **scientific decision that should be confirmed with Yair** before
 implementation. It is **not implemented in Phase 3f**.
 
+### `[Open #9]` Exact paper scoring convention for word-level accuracy
+
+Ueno et al. 2011 (Figure 2) evaluates repetition accuracy using a zero-error
+radius, but the exact scoring convention is not fully specified:
+
+1. Whether word correctness is evaluated on the output phase only (ticks T..2T-1)
+   or across all 2T ticks (including input-phase silence).
+2. Whether the radius matches the training `zero_error_radius` (0.1) or is
+   defined independently.
+3. Whether word correctness should be derived from an all-units-within-radius
+   criterion or from another implementation-specific convention remains open.
+
+The current implementation uses output-phase-only, all-units-within-radius at
+`eval_radius=0.1` (default) as the candidate metric
+(`output_all_units_within_radius`). This can differ from `zero_error_radius`
+(the training dead-zone). **This should be confirmed with Yair before reporting
+any result as a replication of Figure 2.**
+
 ---
 
 ## 13. Run results interpretation (June 2026)
@@ -530,3 +548,45 @@ many epochs to push the sigmoid output above 0.9.
 unit's activation (e.g. from 0.1 to 0.3 over 20 epochs) is immediately visible,
 even when `output_positive_threshold_acc` remains zero. It is therefore the
 **earliest available signal** of phoneme production learning.
+
+---
+
+## 14. Evaluation metrics: what each one measures
+
+The script computes and reports several overlapping metrics. This table clarifies
+what each one actually tests.
+
+| Metric | Phase(s) | Unit scope | Criterion | Primary purpose |
+|--------|----------|-----------|-----------|-----------------|
+| `phoneme_accuracy` | Output | Per-tick argmax | argmax(output) == argmax(target) | Phoneme identification rate |
+| `exact_match` | Output | Whole sequence | All ticks phoneme_accuracy correct | Strict whole-word argmax match |
+| `threshold_accuracy` | Output | All units (mixed) | \|output−target\| < 0.1 | **Misleading** — dominated by 38/39 negative units; kept for backward compatibility |
+| `input_silence_threshold_acc` | Input | All units | output < 0.1 | Fraction of input-phase units suppressed |
+| `output_negative_threshold_acc` | Output | Negative units only | output < 0.1 | Zero-target suppression rate (38/39 units per tick) |
+| `output_positive_threshold_acc` | Output | Positive unit only | output > 0.9 | Near-saturation phoneme activation (strict) |
+| `mean_positive_output` | Output | Positive unit only | mean sigmoid activation | Earliest continuous signal of phoneme learning |
+| `mean_negative_output` | Output | Negative units only | mean sigmoid activation | Baseline suppression level |
+| `mean_max_motor_output` | Output | Max per tick | mean of per-tick max | Whether any unit is being "selected" |
+| `output_all_units_within_radius` | Output | All units | \|output−target\| < eval_radius | **Candidate paper-like word accuracy** [Open #9] |
+| `input_all_silent_within_radius` | Input | All units | output < eval_radius | Word-level input silence criterion |
+| `trial_all_supervised_units_within_radius` | Both | All units | Both above True | Strictest word criterion [Open #9] |
+
+### Key distinctions
+
+**`exact_match` vs `output_all_units_within_radius`:**
+These are not equivalent. `exact_match` checks only 1 unit per output tick (the argmax).
+`output_all_units_within_radius` checks all 39 motor units against their targets.
+A word can satisfy `exact_match` but still fail `output_all_units_within_radius` if a
+negative unit remains above `eval_radius`. Conversely, `output_all_units_within_radius`
+is technically less strict for the positive unit (it requires `|output−1| < radius`,
+not `argmax correctness`), but much stricter globally because of the 38 negative units.
+
+**`threshold_accuracy` vs `output_negative_threshold_acc`:**
+`threshold_accuracy` mixes all 39 output-phase units and is dominated by the 38/39
+negative units — it rises to ~0.9 even when no phoneme is produced. Use
+`output_negative_threshold_acc` to track suppression specifically, and
+`output_positive_threshold_acc` / `mean_positive_output` to track phoneme production.
+
+**`output_all_units_within_radius` is not confirmed Figure 2 replication:**
+See `[Open #9]` in §12. The paper's exact scoring convention is not fully specified.
+Do not report this metric as a Figure 2 result without confirmation from Yair.
