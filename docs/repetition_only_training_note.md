@@ -430,3 +430,103 @@ Whether the paper intended truncated BPTT (e.g. blocking gradient at the tick
 boundary where sound goes silent) is not specified in the supplement. This is
 unlikely to matter in practice for 6–10 ticks but should be noted as an
 assumption.
+
+### `[Open #8]` Positive/negative unit imbalance in the BCE loss
+
+For each output-phase tick, there is 1 positive unit (target = 1.0) and 38
+negative units (target = 0.0). Across a 2T-tick repetition trial, the ratio
+is approximately 77 zero-target pairs per positive-target pair (~98.7 % of all
+supervised (tick, unit) pairs have a zero target).
+
+Gradient descent first suppresses the many negative units (cheap, fast) before
+the positive unit becomes the dominant learning signal. This is the mechanistic
+explanation for the Phase 3e diagnostic results: BCE drops quickly while phoneme
+argmax accuracy stays near chance.
+
+One engineering mitigation is **class-balanced BCE** (up-weight positive units
+by a factor of ~38 to equalize the gradient contribution) or **focal loss**
+(down-weight easy negatives after they are suppressed). However, applying such
+reweighting would **change the training objective** relative to the original
+paper and might not replicate the paper's training dynamics. This is a
+**scientific decision that should be confirmed with Yair** before
+implementation. It is **not implemented in Phase 3f**.
+
+---
+
+## 13. Run results interpretation (June 2026)
+
+### First diagnostic runs (Phase 3e)
+
+Two runs were conducted with `--zero-error-radius 0.1 --loss-reduction sum
+--lr 0.01`:
+
+| Run | Items | Epochs | BCE start → end | phoneme_acc | threshold_acc | exact_match |
+|-----|-------|--------|-----------------|-------------|---------------|-------------|
+| Smoke | 5 | 2 | 145→24 | 0.094→0.094 | 0.39→0.90 | 0/5→0/5 |
+| Diagnostic | 20 | 20 | 89→21 | 0.065→0.084 | 0.39→0.84 | 0/20→0/20 |
+
+### Why BCE drops strongly but phoneme argmax accuracy stays flat
+
+The motor target for each output-phase tick is one-hot (39 dimensions):
+- **1 positive unit**: target = 1.0
+- **38 negative units**: target = 0.0
+
+For a T-phoneme word, across 2T total ticks:
+- **T** positive-target (tick, unit) pairs — the units we want the model to activate.
+- **77T** zero-target pairs (input-phase all-zero + output-phase 38 negatives).
+
+With `zero_error_radius = 0.1`: sigmoid outputs start near 0.5. Pushing each
+zero-target unit from 0.5 toward 0 enters the dead zone after a few gradient
+steps. Once dead-zoned, that unit contributes no further loss or gradient. With
+77× more zero-target units than positive-target units, the total BCE collapses
+once the negative units are suppressed.
+
+The positive unit (target=1, output≈0.5 initially) has `|output − target| ≈ 0.5`,
+well above the dead-zone threshold of 0.1, so **it never enters the dead zone**.
+Its loss remains active throughout training. But early in training, its gradient
+is small relative to the 77 negative-unit gradients per tick.
+
+**Phoneme argmax**: even when all 39 outputs are near-zero, `argmax` still
+selects the highest value among 39 suppressed units — essentially random.
+Argmax accuracy stays near 1/39 ≈ 0.026 chance. The small observed improvement
+to ~0.08–0.09 suggests mild differential suppression across units but no
+reliable phoneme-specific activation.
+
+### Why the original threshold_accuracy is misleading
+
+`threshold_accuracy` = fraction of output-phase (tick, unit) pairs where
+`|output − target| < 0.1`. For a model that drives all outputs to near-0:
+
+- 38/39 negative units: `|0 − 0| < 0.1` → PASS ✓
+- 1/39 positive unit: `|0 − 1| = 1.0 > 0.1` → FAIL ✗
+- Expected per-tick threshold accuracy: 38/39 ≈ 0.974
+
+The observed rise to ~0.84–0.90 after training is explained almost entirely by
+negative-unit suppression. This metric **does not indicate phoneme production**.
+
+### How to interpret the new split metrics (Phase 3f)
+
+Phase 3f adds `_compute_repetition_metric_breakdown()` to `_evaluate_one_trial()`.
+The new metrics appear in `predictions_before.json` and `predictions_after.json`,
+and are printed in the console evaluation summary.
+
+| Metric | What it measures | After suppression only | After phoneme learning begins |
+|--------|-----------------|------------------------|-------------------------------|
+| `input_silence_threshold_acc` | Fraction of input-phase units below 0.1 | High (~1.0) | High (~1.0) |
+| `output_negative_threshold_acc` | Fraction of negative units below 0.1 | High (~0.97) | High (~0.97) |
+| `output_positive_threshold_acc` | Fraction of positive units above 0.9 | ~0.0 | Rising toward 1.0 |
+| `mean_positive_output` | Mean activation of the correct phoneme unit | ~0.05–0.15 | Rising above 0.5 |
+| `mean_negative_output` | Mean activation of negative units | ~0.03–0.08 | Low (~0.03–0.08) |
+| `mean_max_motor_output` | Mean per-tick maximum motor activation | Low (~0.1) | Rising |
+
+### Why `mean_positive_output` is more informative than `output_positive_threshold_acc`
+
+`output_positive_threshold_acc` uses a strict threshold of 0.9. The positive
+unit must exceed 0.9 — close to saturation — before it contributes to this
+metric. Even if the model is learning to activate the correct unit, it may take
+many epochs to push the sigmoid output above 0.9.
+
+`mean_positive_output` is a continuous measure: any upward trend in the correct
+unit's activation (e.g. from 0.1 to 0.3 over 20 epochs) is immediately visible,
+even when `output_positive_threshold_acc` remains zero. It is therefore the
+**earliest available signal** of phoneme production learning.

@@ -82,6 +82,75 @@ def _item_label(item: WordItem | PseudowordItem) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Split metric diagnostics
+# ---------------------------------------------------------------------------
+
+
+def _compute_repetition_metric_breakdown(
+    motor_input: torch.Tensor,
+    motor_output: torch.Tensor,
+    motor_targets_out: torch.Tensor,
+) -> dict:
+    """Compute split threshold and activation metrics for one repetition trial.
+
+    Separates input-phase silence from output-phase positive/negative unit
+    behavior, allowing diagnosis beyond the combined threshold_accuracy metric.
+
+    Interpretation:
+      If output_negative_threshold_acc rises quickly but
+      output_positive_threshold_acc stays near 0, the model is learning
+      zero-target suppression, not phoneme production.
+      mean_positive_output rising above 0.5 is typically the earliest signal
+      of phoneme production learning, before output_positive_threshold_acc or
+      argmax accuracy improve.
+
+    Args:
+        motor_input:       (T, motor_size) — input-phase motor outputs (ticks 0..T-1).
+                           All motor targets are zero during the input phase.
+        motor_output:      (T, motor_size) — output-phase motor outputs (ticks T..2T-1).
+        motor_targets_out: (T, motor_size) — output-phase one-hot targets.
+
+    Returns dict with keys:
+        input_silence_threshold_acc:   fraction of (input-phase, unit) pairs with output < 0.1.
+        output_negative_threshold_acc: fraction of output-phase negative-target (tick, unit)
+                                       pairs with output < 0.1.
+        output_positive_threshold_acc: fraction of output-phase ticks where the positive unit
+                                       (argmax of target) has output > 0.9.  [strict threshold]
+        mean_positive_output:          mean activation of the positive unit across output ticks.
+        mean_negative_output:          mean activation of negative units across output ticks.
+        mean_max_motor_output:         mean of per-tick max(motor_output) across output ticks.
+    """
+    T = motor_output.shape[0]
+
+    # Input phase: all targets = 0; report fraction suppressed below 0.1.
+    input_silence_threshold_acc = (motor_input < 0.1).float().mean().item()
+
+    # Output phase: split by positive (target=1) vs negative (target=0) units.
+    pos_indices = motor_targets_out.argmax(dim=1)         # (T,) — index of the 1 per tick
+    neg_mask    = motor_targets_out < 0.5                 # (T, motor_size) bool mask
+
+    # Device-safe indexing: arange on the same device as motor_output.
+    idx         = torch.arange(T, device=motor_output.device)
+    pos_outputs = motor_output[idx, pos_indices]          # (T,)
+    neg_outputs = motor_output[neg_mask]                  # (T × (motor_size − 1),) flattened
+
+    output_positive_threshold_acc = (pos_outputs > 0.9).float().mean().item()
+    output_negative_threshold_acc = (neg_outputs < 0.1).float().mean().item()
+    mean_positive_output          = pos_outputs.mean().item()
+    mean_negative_output          = neg_outputs.mean().item()
+    mean_max_motor_output         = motor_output.max(dim=1).values.mean().item()
+
+    return {
+        "input_silence_threshold_acc":    round(input_silence_threshold_acc, 4),
+        "output_negative_threshold_acc":  round(output_negative_threshold_acc, 4),
+        "output_positive_threshold_acc":  round(output_positive_threshold_acc, 4),
+        "mean_positive_output":           round(mean_positive_output, 4),
+        "mean_negative_output":           round(mean_negative_output, 4),
+        "mean_max_motor_output":          round(mean_max_motor_output, 4),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Trial construction
 # ---------------------------------------------------------------------------
 
@@ -128,20 +197,19 @@ def _evaluate_one_trial(
 ) -> dict:
     """Run one trial in eval mode (no_grad) and compute prediction metrics.
 
-    Metrics are computed on the output phase (ticks T..2T-1) only.
+    Argmax accuracy, mixed threshold accuracy, and exact match are computed on
+    the output phase (ticks T..2T-1) only. Split metrics from
+    _compute_repetition_metric_breakdown() cover both phases separately.
 
-    Accuracy definitions:
-      phoneme_accuracy:   fraction of output-phase ticks where argmax of motor
-                          output matches argmax of (one-hot) target.
-      threshold_accuracy: fraction of (tick, unit) pairs in the output phase
-                          where |motor_output - target| < 0.1.
-      exact_match:        True if phoneme_accuracy == 1.0 (all phonemes correct).
-
+    Note: threshold_accuracy mixes positive and negative target units. Use
+    output_positive_threshold_acc and output_negative_threshold_acc for
+    diagnostic purposes.
     [Note #4] Sound input is the raw phoneme tensor (clamped), not sigmoided.
     [Open #3] The ventral pathway is computed at every tick.
     """
     T = trial.phon_tensor.shape[0]
-    output_tick_indices = list(range(T, 2 * T))    # output-phase tick indices in results list
+    input_tick_indices  = list(range(T))           # ticks 0..T-1
+    output_tick_indices = list(range(T, 2 * T))    # ticks T..2T-1
 
     trial_dev = move_trial_to_device(trial, device)
     sem_zeros = torch.zeros(cfg.vATL_size, device=device)
@@ -150,6 +218,10 @@ def _evaluate_one_trial(
     with torch.no_grad():
         results = model.run_trial(trial_dev.task, trial_dev.phon_tensor, sem_zeros, cfg)
 
+    # Stack input-phase motor activations: shape (T, motor_size)
+    motor_outputs_input = torch.stack(
+        [results[t].state.motor for t in input_tick_indices], dim=0
+    )
     # Stack output-phase motor activations: shape (T, motor_size)
     motor_outputs = torch.stack(
         [results[t].state.motor for t in output_tick_indices], dim=0
@@ -165,9 +237,15 @@ def _evaluate_one_trial(
     phoneme_correct = [t == p for t, p in zip(target_indices, output_indices)]
     phoneme_acc = sum(phoneme_correct) / T if T > 0 else float("nan")
 
-    # Threshold accuracy over all (tick, unit) pairs in the output phase
+    # Mixed threshold accuracy (output phase, positive + negative units combined).
+    # Note: dominated by negative units (38/39); use split metrics for diagnosis.
     within_threshold = (motor_outputs - motor_targets).abs() < 0.1
     threshold_acc = within_threshold.float().mean().item()
+
+    # Split metric breakdown: separates phases and unit polarities.
+    breakdown = _compute_repetition_metric_breakdown(
+        motor_outputs_input, motor_outputs, motor_targets
+    )
 
     return {
         "label":              trial.label,
@@ -179,6 +257,7 @@ def _evaluate_one_trial(
         "phoneme_accuracy":   round(phoneme_acc, 4),
         "threshold_accuracy": round(threshold_acc, 4),
         "exact_match":        all(phoneme_correct),
+        **breakdown,
     }
 
 
@@ -196,14 +275,36 @@ def evaluate_predictions(
     ]
 
 
-def _prediction_summary(preds: list[dict]) -> tuple[float, float, int]:
-    """Return (avg_phoneme_acc, avg_threshold_acc, n_exact) for a list of prediction dicts."""
+def _prediction_summary(preds: list[dict]) -> dict:
+    """Aggregate per-trial prediction dicts into a named summary dict.
+
+    All float values are float('nan') when preds is empty.
+    """
+    nan = float("nan")
     if not preds:
-        return float("nan"), float("nan"), 0
-    avg_ph  = sum(p["phoneme_accuracy"]   for p in preds) / len(preds)
-    avg_thr = sum(p["threshold_accuracy"] for p in preds) / len(preds)
-    n_exact = sum(1 for p in preds if p["exact_match"])
-    return avg_ph, avg_thr, n_exact
+        return {
+            "avg_phoneme_accuracy":              nan,
+            "avg_threshold_accuracy":            nan,
+            "n_exact":                           0,
+            "avg_input_silence_threshold_acc":   nan,
+            "avg_output_negative_threshold_acc": nan,
+            "avg_output_positive_threshold_acc": nan,
+            "avg_mean_positive_output":          nan,
+            "avg_mean_negative_output":          nan,
+            "avg_mean_max_motor_output":         nan,
+        }
+    n = len(preds)
+    return {
+        "avg_phoneme_accuracy":              sum(p["phoneme_accuracy"]              for p in preds) / n,
+        "avg_threshold_accuracy":            sum(p["threshold_accuracy"]            for p in preds) / n,
+        "n_exact":                           sum(1 for p in preds if p["exact_match"]),
+        "avg_input_silence_threshold_acc":   sum(p["input_silence_threshold_acc"]   for p in preds) / n,
+        "avg_output_negative_threshold_acc": sum(p["output_negative_threshold_acc"] for p in preds) / n,
+        "avg_output_positive_threshold_acc": sum(p["output_positive_threshold_acc"] for p in preds) / n,
+        "avg_mean_positive_output":          sum(p["mean_positive_output"]          for p in preds) / n,
+        "avg_mean_negative_output":          sum(p["mean_negative_output"]          for p in preds) / n,
+        "avg_mean_max_motor_output":         sum(p["mean_max_motor_output"]         for p in preds) / n,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -552,10 +653,17 @@ def main(argv: list[str] | None = None) -> int:
     # ------------------------------------------------------------------
     print("\n[4/5] Pre-training evaluation (model at initialisation)")
     preds_before = evaluate_predictions(model, trials, cfg, inventory.symbols, device)
-    ph_b, thr_b, ex_b = _prediction_summary(preds_before)
-    print(f"  Phoneme argmax accuracy: {ph_b:.4f}")
-    print(f"  Threshold accuracy:      {thr_b:.4f}  (|out-target| < 0.1)")
-    print(f"  Whole-word exact match:  {ex_b}/{len(preds_before)}")
+    s_b = _prediction_summary(preds_before)
+    print(f"  Phoneme argmax accuracy:          {s_b['avg_phoneme_accuracy']:.4f}")
+    print(f"  Threshold accuracy (mixed):       {s_b['avg_threshold_accuracy']:.4f}  (output phase, pos+neg combined)")
+    print(f"  Whole-word exact match:           {s_b['n_exact']}/{len(preds_before)}")
+    print(f"  -- Split metrics --")
+    print(f"  Input silence  (frac < 0.1):      {s_b['avg_input_silence_threshold_acc']:.4f}")
+    print(f"  Output neg     (frac < 0.1):      {s_b['avg_output_negative_threshold_acc']:.4f}")
+    print(f"  Output pos     (frac > 0.9):      {s_b['avg_output_positive_threshold_acc']:.4f}")
+    print(f"  Mean positive unit activation:    {s_b['avg_mean_positive_output']:.4f}")
+    print(f"  Mean negative unit activation:    {s_b['avg_mean_negative_output']:.4f}")
+    print(f"  Mean max motor per output tick:   {s_b['avg_mean_max_motor_output']:.4f}")
 
     # ------------------------------------------------------------------
     # Step 5: Training
@@ -586,10 +694,17 @@ def main(argv: list[str] | None = None) -> int:
     # ------------------------------------------------------------------
     print("\nPost-training evaluation")
     preds_after = evaluate_predictions(model, trials, cfg, inventory.symbols, device)
-    ph_a, thr_a, ex_a = _prediction_summary(preds_after)
-    print(f"  Phoneme argmax accuracy: {ph_a:.4f}")
-    print(f"  Threshold accuracy:      {thr_a:.4f}  (|out-target| < 0.1)")
-    print(f"  Whole-word exact match:  {ex_a}/{len(preds_after)}")
+    s_a = _prediction_summary(preds_after)
+    print(f"  Phoneme argmax accuracy:          {s_a['avg_phoneme_accuracy']:.4f}")
+    print(f"  Threshold accuracy (mixed):       {s_a['avg_threshold_accuracy']:.4f}  (output phase, pos+neg combined)")
+    print(f"  Whole-word exact match:           {s_a['n_exact']}/{len(preds_after)}")
+    print(f"  -- Split metrics --")
+    print(f"  Input silence  (frac < 0.1):      {s_a['avg_input_silence_threshold_acc']:.4f}")
+    print(f"  Output neg     (frac < 0.1):      {s_a['avg_output_negative_threshold_acc']:.4f}")
+    print(f"  Output pos     (frac > 0.9):      {s_a['avg_output_positive_threshold_acc']:.4f}")
+    print(f"  Mean positive unit activation:    {s_a['avg_mean_positive_output']:.4f}")
+    print(f"  Mean negative unit activation:    {s_a['avg_mean_negative_output']:.4f}")
+    print(f"  Mean max motor per output tick:   {s_a['avg_mean_max_motor_output']:.4f}")
 
     # ------------------------------------------------------------------
     # Save outputs
@@ -620,8 +735,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Initial avg BCE loss:  {initial_avg:.6f}")
     print(f"  Final avg BCE loss:    {final_avg:.6f}")
     print(f"  Loss decreased:        {'YES ✓' if loss_decreased else 'NO  (expected for very short runs)'}")
-    print(f"  Phoneme acc:  before={ph_b:.4f}  →  after={ph_a:.4f}")
-    print(f"  Exact match:  before={ex_b}/{len(preds_before)}  →  after={ex_a}/{len(preds_after)}")
+    print(f"  Phoneme acc:  before={s_b['avg_phoneme_accuracy']:.4f}  →  after={s_a['avg_phoneme_accuracy']:.4f}")
+    print(f"  Mean pos out: before={s_b['avg_mean_positive_output']:.4f}  →  after={s_a['avg_mean_positive_output']:.4f}")
+    print(f"  Exact match:  before={s_b['n_exact']}/{len(preds_before)}  →  after={s_a['n_exact']}/{len(preds_after)}")
     print(f"  All losses finite:     YES")
     print(f"  Output dir:            {run_dir}")
 
