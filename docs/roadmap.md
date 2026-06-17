@@ -50,9 +50,9 @@ Phase 2 is split into sub-steps:
 - `configs/lichtheim2.yaml`: full-size layer configuration with `metadata:` block for reference values
 - `tests/test_faithful_architecture.py`: tests for real-size shapes, activation range, copy-back, and task tick counts
 
-**Success criterion:** All three task types run `forward_tick` and `run_trial` with faithful layer sizes; shapes correct; activations in [0, 1].
+**Success criterion:** All three task types run `forward_tick` and `run_trial` with faithful layer sizes; shapes correct; activations in [0, 1]. ✓
 
-### Phase 2b — Faithful Weight Initialisation and Connectivity Audit — **In Progress**
+### Phase 2b — Faithful Weight Initialisation and Connectivity Audit — **Complete**
 
 **Goal:** Implement the weight initialisation scheme from the paper and audit all connection/bias conventions against Supplement Figure S1.
 
@@ -60,9 +60,9 @@ Phase 2 is split into sub-steps:
 - `Lichtheim2Model._init_weights()`: standard weights [−1, 1] `[Paper]`; Elman weights [−0.5, 0.5] `[Paper]`; copy-back weights [−0.5, 0.5] `[Inferred]`; additive bias = −1.0 `[Inferred — PyTorch approximation of LENS bias-link convention]`
 - `tests/test_weight_initialization.py`: tests for weight ranges, bias values, connectivity completeness
 
-**Success criterion:** All weight tensors and bias values match the implemented conventions; connectivity audit confirms all 10 connections from Supplement Figure S1 are present; existing toy and faithful tests still pass.
+**Success criterion:** All weight tensors and bias values match the implemented conventions; connectivity audit confirms all 10 connections from Supplement Figure S1 are present; existing toy and faithful tests still pass. ✓
 
-### Phase 2c — Unbatched Variable-Length Trial Support — **In Progress**
+### Phase 2c — Unbatched Variable-Length Trial Support — **Complete**
 
 **Goal:** Extend `build_trial_inputs` and `run_trial` to handle phoneme sequences of arbitrary length T. No padding, masking, EOS, batching, or real data loading. No training.
 
@@ -77,7 +77,7 @@ Note: `cfg.repetition_ticks`, `cfg.comprehension_ticks`, and `cfg.speaking_ticks
 - Updated `src/lichtheim2/tasks.py`: T inferred from `phon_pattern.shape[0]`; 1-D input treated as T=1
 - `tests/test_variable_length_trials.py`: tests for T=1, 2, 3, 5 including 1-D fallback
 
-**Success criterion:** Model runs unbatched forward trials for T=1, 2, 3, 5; tick counts correct (2T / T / T); activations in [0, 1]; all existing toy and faithful tests unaffected. Padding, masking, EOS, and batching remain `[Open]`.
+**Success criterion:** Model runs unbatched forward trials for T=1, 2, 3, 5; tick counts correct (2T / T / T); activations in [0, 1]; all existing toy and faithful tests unaffected. Padding, masking, EOS, and batching remain `[Open]`. ✓
 
 ---
 
@@ -93,9 +93,9 @@ Phase 3 is split into sub-steps:
 - Updated `docs/data_encoding_notes.md`: CSV schemas, No_Stress recommendation, encoding options
 - Updated `docs/open_questions.md`: D10–D18 covering encoding, coverage validation, pseudowords
 
-**Success criterion:** Encoding plan documented; coverage validation requirement identified; phoneme feature dimension open but candidate options listed.
+**Success criterion:** Encoding plan documented; coverage validation requirement identified; phoneme feature dimension open but candidate options listed. ✓
 
-### Phase 3b — English Phoneme Encoder and Word Item Loaders — **In Progress**
+### Phase 3b — English Phoneme Encoder and Word Item Loaders — **Complete**
 
 **Goal:** Implement a minimal phoneme inventory loader, one-hot encoder, and word/pseudoword item loaders. Validate that all No_Stress phonemes are covered and that encoded items can be passed through `run_trial()`. No training, no semantic vectors, no batching.
 
@@ -106,7 +106,7 @@ Phase 3 is split into sub-steps:
 - `tests/test_english_phoneme_encoder.py`: always-run + CSV-dependent encoder tests
 - `tests/test_english_word_items.py`: always-run mock-CSV tests + CSV-dependent loader tests; integration with `run_trial()` for REPETITION
 
-**Success criterion:** All No_Stress phonemes covered; lengths validated; `WordItem` and `PseudowordItem` load with correct tensor shapes; required-field errors are explicit; encoded items run through REPETITION `run_trial()`; existing tests unaffected.
+**Success criterion:** All No_Stress phonemes covered; lengths validated; `WordItem` and `PseudowordItem` load with correct tensor shapes; required-field errors are explicit; encoded items run through REPETITION `run_trial()`; existing tests unaffected. ✓
 
 **Additional Phase 3b deliverables (supervised trial targets):**
 - `src/lichtheim2/semantics.py`: `assign_artificial_semantics()` — reproducible binary semantic vectors keyed by row_index
@@ -118,7 +118,7 @@ Phase 3 is split into sub-steps:
 
 Phase 3c is split into sub-steps:
 
-### Phase 3c-1 — Minimal Training Loop — **In Progress**
+### Phase 3c-1 — Minimal Training Loop — **Complete**
 
 **Goal:** Implement the first minimal PyTorch training loop for supervised trials.
 
@@ -128,7 +128,7 @@ Phase 3c is split into sub-steps:
 - `scripts/smoke_train_repetition.py`: synthetic repetition smoke training
 - `tests/test_training_loop.py`: loss, gradient, parameter update, finite-loss, and loss-decrease tests
 
-**Success criterion:** A small synthetic repetition training run decreases loss; existing tests pass; no full experiment or batching yet.
+**Success criterion:** A small synthetic repetition training run decreases loss; existing tests pass; no full experiment or batching yet. ✓
 
 #### Phase 3c-2 — Real-Data Repetition Training — **Complete**
 
@@ -189,7 +189,7 @@ Phase 3c is split into sub-steps:
 
 **Success criterion:** `loss_reduction="sum"` is bit-for-bit identical to previous default; `mean_active` = `total_loss / n_active`; dead-zone interaction correct; invalid string raises `ValueError`; always-run tests pass without CSV files; existing tests unaffected. ✓
 
-#### Phase 3c-7 — Loss Reduction Comparison — **In Progress**
+#### Phase 3c-7 — Loss Reduction Comparison — **Complete**
 
 **Goal:** Lightweight comparison script that runs both `sum` and `mean_active` reductions under identical conditions and prints a compact table, so training dynamics can be directly compared before committing to a default.
 
