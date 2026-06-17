@@ -150,6 +150,58 @@ def _compute_repetition_metric_breakdown(
     }
 
 
+def _compute_repetition_word_accuracy(
+    motor_input: torch.Tensor,
+    motor_output: torch.Tensor,
+    motor_targets_out: torch.Tensor,
+    radius: float = 0.1,
+) -> dict:
+    """Compute candidate paper-like word-level accuracy booleans for one trial.
+
+    Returns three per-trial boolean metrics evaluated using error radius `radius`.
+
+    output_all_units_within_radius:
+        True iff every (tick, unit) pair in the output phase satisfies
+        |motor_output - target| < radius. This is the main candidate paper-like
+        repetition word accuracy. [Open #9]
+
+    input_all_silent_within_radius:
+        True iff every input-phase motor unit is below `radius` (all input-phase
+        motor targets are zero, so this measures whether the model suppresses
+        motor activation during the input phase).
+
+    trial_all_supervised_units_within_radius:
+        True iff both output_all_units_within_radius AND
+        input_all_silent_within_radius are True. Stricter criterion whose
+        relevance depends on whether input-phase silence should be scored. [Open #9]
+
+    Note: eval_radius can differ from zero_error_radius used during training.
+    For example, train with zero_error_radius=0.0 (full gradient) and evaluate
+    with eval_radius=0.1 (paper-like criterion).
+
+    Args:
+        motor_input:       (T, motor_size) — input-phase motor outputs.
+        motor_output:      (T, motor_size) — output-phase motor outputs.
+        motor_targets_out: (T, motor_size) — output-phase targets (one-hot).
+        radius:            error radius for word-level evaluation (default 0.1).
+    """
+    output_within = (motor_output - motor_targets_out).abs() < radius
+    output_all_units_within_radius = bool(output_within.all().item())
+
+    input_within = motor_input < radius          # input-phase targets are all zero
+    input_all_silent_within_radius = bool(input_within.all().item())
+
+    trial_all_supervised_units_within_radius = (
+        output_all_units_within_radius and input_all_silent_within_radius
+    )
+
+    return {
+        "output_all_units_within_radius":           output_all_units_within_radius,
+        "input_all_silent_within_radius":            input_all_silent_within_radius,
+        "trial_all_supervised_units_within_radius":  trial_all_supervised_units_within_radius,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Trial construction
 # ---------------------------------------------------------------------------
@@ -194,6 +246,7 @@ def _evaluate_one_trial(
     cfg: ModelConfig,
     inventory_symbols: list[str],
     device: torch.device,
+    eval_radius: float = 0.1,
 ) -> dict:
     """Run one trial in eval mode (no_grad) and compute prediction metrics.
 
@@ -247,6 +300,11 @@ def _evaluate_one_trial(
         motor_outputs_input, motor_outputs, motor_targets
     )
 
+    # Candidate paper-like word-level accuracy booleans.
+    word_acc = _compute_repetition_word_accuracy(
+        motor_outputs_input, motor_outputs, motor_targets, radius=eval_radius
+    )
+
     return {
         "label":              trial.label,
         "item_id":            trial.item_id,
@@ -258,6 +316,7 @@ def _evaluate_one_trial(
         "threshold_accuracy": round(threshold_acc, 4),
         "exact_match":        all(phoneme_correct),
         **breakdown,
+        **word_acc,
     }
 
 
@@ -267,10 +326,11 @@ def evaluate_predictions(
     cfg: ModelConfig,
     inventory_symbols: list[str],
     device: torch.device,
+    eval_radius: float = 0.1,
 ) -> list[dict]:
     """Evaluate predictions for all trials. Returns one record per trial."""
     return [
-        _evaluate_one_trial(model, trial, cfg, inventory_symbols, device)
+        _evaluate_one_trial(model, trial, cfg, inventory_symbols, device, eval_radius)
         for trial in trials
     ]
 
@@ -292,8 +352,17 @@ def _prediction_summary(preds: list[dict]) -> dict:
             "avg_mean_positive_output":          nan,
             "avg_mean_negative_output":          nan,
             "avg_mean_max_motor_output":         nan,
+            "n_output_correct":                  0,
+            "n_input_silent":                    0,
+            "n_strict_correct":                  0,
+            "paper_like_output_word_accuracy":   nan,
+            "input_silence_word_accuracy":       nan,
+            "candidate_strict_trial_accuracy":   nan,
         }
     n = len(preds)
+    n_output_correct = sum(1 for p in preds if p["output_all_units_within_radius"])
+    n_input_silent   = sum(1 for p in preds if p["input_all_silent_within_radius"])
+    n_strict_correct = sum(1 for p in preds if p["trial_all_supervised_units_within_radius"])
     return {
         "avg_phoneme_accuracy":              sum(p["phoneme_accuracy"]              for p in preds) / n,
         "avg_threshold_accuracy":            sum(p["threshold_accuracy"]            for p in preds) / n,
@@ -304,6 +373,12 @@ def _prediction_summary(preds: list[dict]) -> dict:
         "avg_mean_positive_output":          sum(p["mean_positive_output"]          for p in preds) / n,
         "avg_mean_negative_output":          sum(p["mean_negative_output"]          for p in preds) / n,
         "avg_mean_max_motor_output":         sum(p["mean_max_motor_output"]         for p in preds) / n,
+        "n_output_correct":                  n_output_correct,
+        "n_input_silent":                    n_input_silent,
+        "n_strict_correct":                  n_strict_correct,
+        "paper_like_output_word_accuracy":   n_output_correct / n,
+        "input_silence_word_accuracy":       n_input_silent   / n,
+        "candidate_strict_trial_accuracy":   n_strict_correct / n,
     }
 
 
@@ -402,6 +477,7 @@ def save_run_config(
         "device":             args.device,
         "seed":               args.seed,
         "zero_error_radius":  args.zero_error_radius,
+        "eval_radius":        args.eval_radius,
         "loss_reduction":     args.loss_reduction,
         "output_dir":         str(run_dir),
         "model_config": {
@@ -529,6 +605,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Loss reduction: 'sum' (default, paper behavior) or 'mean_active' (diagnostic).",
     )
     p.add_argument(
+        "--eval-radius", type=float, default=0.1, dest="eval_radius",
+        help=(
+            "Radius for word-level evaluation metrics: a word is scored as correct "
+            "if every output-phase motor unit satisfies |output - target| < eval_radius. "
+            "Can differ from --zero-error-radius (training dead zone). "
+            "Default 0.1 (paper zero_error_radius value). [Open #9]"
+        ),
+    )
+    p.add_argument(
         "--output-dir", type=str, default="outputs/repetition_only", dest="output_dir",
         help="Parent output directory; a timestamped subdirectory is created. (default: outputs/repetition_only)",
     )
@@ -544,6 +629,8 @@ def validate_args(args: argparse.Namespace) -> str | None:
         return f"--lr must be > 0, got {args.lr}"
     if args.zero_error_radius < 0.0:
         return f"--zero-error-radius must be >= 0, got {args.zero_error_radius}"
+    if args.eval_radius < 0.0:
+        return f"--eval-radius must be >= 0, got {args.eval_radius}"
     return None
 
 
@@ -652,11 +739,13 @@ def main(argv: list[str] | None = None) -> int:
     # Step 4: Pre-training predictions
     # ------------------------------------------------------------------
     print("\n[4/5] Pre-training evaluation (model at initialisation)")
-    preds_before = evaluate_predictions(model, trials, cfg, inventory.symbols, device)
+    preds_before = evaluate_predictions(model, trials, cfg, inventory.symbols, device,
+                                        eval_radius=args.eval_radius)
     s_b = _prediction_summary(preds_before)
+    nb  = len(preds_before)
     print(f"  Phoneme argmax accuracy:          {s_b['avg_phoneme_accuracy']:.4f}")
     print(f"  Threshold accuracy (mixed):       {s_b['avg_threshold_accuracy']:.4f}  (output phase, pos+neg combined)")
-    print(f"  Whole-word exact match:           {s_b['n_exact']}/{len(preds_before)}")
+    print(f"  Whole-word exact match:           {s_b['n_exact']}/{nb}")
     print(f"  -- Split metrics --")
     print(f"  Input silence  (frac < 0.1):      {s_b['avg_input_silence_threshold_acc']:.4f}")
     print(f"  Output neg     (frac < 0.1):      {s_b['avg_output_negative_threshold_acc']:.4f}")
@@ -664,6 +753,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Mean positive unit activation:    {s_b['avg_mean_positive_output']:.4f}")
     print(f"  Mean negative unit activation:    {s_b['avg_mean_negative_output']:.4f}")
     print(f"  Mean max motor per output tick:   {s_b['avg_mean_max_motor_output']:.4f}")
+    print(f"  -- Word accuracy (candidate, radius={args.eval_radius}) --")
+    print(f"  Output phase all-within-radius:   {s_b['n_output_correct']}/{nb}  ({s_b['paper_like_output_word_accuracy']:.4f})  [Open #9]")
+    print(f"  Input phase all-silent:           {s_b['n_input_silent']}/{nb}  ({s_b['input_silence_word_accuracy']:.4f})")
+    print(f"  Strict trial (both phases):       {s_b['n_strict_correct']}/{nb}  ({s_b['candidate_strict_trial_accuracy']:.4f})  [Open #9]")
 
     # ------------------------------------------------------------------
     # Step 5: Training
@@ -693,11 +786,13 @@ def main(argv: list[str] | None = None) -> int:
     # Post-training predictions
     # ------------------------------------------------------------------
     print("\nPost-training evaluation")
-    preds_after = evaluate_predictions(model, trials, cfg, inventory.symbols, device)
+    preds_after = evaluate_predictions(model, trials, cfg, inventory.symbols, device,
+                                       eval_radius=args.eval_radius)
     s_a = _prediction_summary(preds_after)
+    na  = len(preds_after)
     print(f"  Phoneme argmax accuracy:          {s_a['avg_phoneme_accuracy']:.4f}")
     print(f"  Threshold accuracy (mixed):       {s_a['avg_threshold_accuracy']:.4f}  (output phase, pos+neg combined)")
-    print(f"  Whole-word exact match:           {s_a['n_exact']}/{len(preds_after)}")
+    print(f"  Whole-word exact match:           {s_a['n_exact']}/{na}")
     print(f"  -- Split metrics --")
     print(f"  Input silence  (frac < 0.1):      {s_a['avg_input_silence_threshold_acc']:.4f}")
     print(f"  Output neg     (frac < 0.1):      {s_a['avg_output_negative_threshold_acc']:.4f}")
@@ -705,6 +800,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Mean positive unit activation:    {s_a['avg_mean_positive_output']:.4f}")
     print(f"  Mean negative unit activation:    {s_a['avg_mean_negative_output']:.4f}")
     print(f"  Mean max motor per output tick:   {s_a['avg_mean_max_motor_output']:.4f}")
+    print(f"  -- Word accuracy (candidate, radius={args.eval_radius}) --")
+    print(f"  Output phase all-within-radius:   {s_a['n_output_correct']}/{na}  ({s_a['paper_like_output_word_accuracy']:.4f})  [Open #9]")
+    print(f"  Input phase all-silent:           {s_a['n_input_silent']}/{na}  ({s_a['input_silence_word_accuracy']:.4f})")
+    print(f"  Strict trial (both phases):       {s_a['n_strict_correct']}/{na}  ({s_a['candidate_strict_trial_accuracy']:.4f})  [Open #9]")
 
     # ------------------------------------------------------------------
     # Save outputs
@@ -735,9 +834,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Initial avg BCE loss:  {initial_avg:.6f}")
     print(f"  Final avg BCE loss:    {final_avg:.6f}")
     print(f"  Loss decreased:        {'YES ✓' if loss_decreased else 'NO  (expected for very short runs)'}")
-    print(f"  Phoneme acc:  before={s_b['avg_phoneme_accuracy']:.4f}  →  after={s_a['avg_phoneme_accuracy']:.4f}")
-    print(f"  Mean pos out: before={s_b['avg_mean_positive_output']:.4f}  →  after={s_a['avg_mean_positive_output']:.4f}")
-    print(f"  Exact match:  before={s_b['n_exact']}/{len(preds_before)}  →  after={s_a['n_exact']}/{len(preds_after)}")
+    print(f"  Phoneme acc:         before={s_b['avg_phoneme_accuracy']:.4f}  →  after={s_a['avg_phoneme_accuracy']:.4f}")
+    print(f"  Mean pos out:        before={s_b['avg_mean_positive_output']:.4f}  →  after={s_a['avg_mean_positive_output']:.4f}")
+    print(f"  Exact match:         before={s_b['n_exact']}/{nb}  →  after={s_a['n_exact']}/{na}")
+    print(f"  Paper-like word acc: before={s_b['n_output_correct']}/{nb}  →  after={s_a['n_output_correct']}/{na}  (radius={args.eval_radius})  [Open #9]")
     print(f"  All losses finite:     YES")
     print(f"  Output dir:            {run_dir}")
 
