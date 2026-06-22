@@ -469,6 +469,33 @@ The current implementation uses output-phase-only, all-units-within-radius at
 (the training dead-zone). **This should be confirmed with Yair before reporting
 any result as a replication of Figure 2.**
 
+### `[Open #10]` Dense sound input projection — experimental adaptation (Phase 3h)
+
+`sound_proj_size` (CLI: `--sound-proj-size N`) adds a shared linear projection
+`Linear(39 → N, bias=False)` applied to the raw phoneme vector before both
+`sound_to_iSMG` (dorsal) and `sound_to_mSTG` (ventral). When `sound_proj_size`
+is `null` (default), the model behaves exactly as in Ueno et al. 2011.
+
+This projection is **not in the paper**. It was motivated by the fact that the
+current English 39D one-hot encoding is itself already a provisional adaptation
+of the original Japanese 21-bit mora feature setup: unlike mora features,
+one-hot phonemes encode no phonological structure — `/p/` and `/b/` are
+orthogonal vectors despite sharing place of articulation. The projection creates
+a learned dense phoneme embedding space that could, in principle, recover
+articulatory feature structure during training.
+
+Key design decisions:
+- `bias=False`: downstream layers (`sound_to_iSMG`, `sound_to_mSTG`) carry biases;
+  a projection bias would be redundant. With `bias=False`, row `k` of
+  `sound_proj.weight` is exactly the learned embedding of phoneme `k`.
+- Zero sound input → zero projected output (correct for silent ticks).
+- Weight init: uniform(−1, 1), same as all feedforward layers [Inferred].
+- Shared across dorsal and ventral pathways (one matrix, not two).
+
+**Any run with `sound_proj_size != null` is a model variant and is NOT a
+replication of Ueno et al. 2011.** Discuss with Yair before interpreting
+projection-enabled results in a comparative context.
+
 ---
 
 ## 13. Run results interpretation (June 2026)
@@ -590,3 +617,161 @@ negative units — it rises to ~0.9 even when no phoneme is produced. Use
 **`output_all_units_within_radius` is not confirmed Figure 2 replication:**
 See `[Open #9]` in §12. The paper's exact scoring convention is not fully specified.
 Do not report this metric as a Figure 2 result without confirmation from Yair.
+
+---
+
+## 15. Phase 3h/3i experiments: dense sound projection and loss decomposition (June 2026)
+
+### 15.1 Technical implementation
+
+#### Optional dense sound input projection [Adapted — not in Ueno et al. 2011]
+
+Phase 3h adds an opt-in linear projection inside `Lichtheim2Model`:
+
+```
+raw phoneme input (39D one-hot)
+  → sound_proj: Linear(39 → N, bias=False)
+  → sound_to_iSMG (dorsal) and sound_to_mSTG (ventral)
+```
+
+The projection is enabled by passing `--sound-proj-size N` (e.g. `--sound-proj-size 20`).
+When the flag is omitted, `sound_proj = None` and the model behaves exactly as in
+Ueno et al. 2011 — the raw 39D one-hot is fed directly into `sound_to_iSMG` and
+`sound_to_mSTG`.
+
+**`bias=False`** — zero sound input must produce zero projected output (correct for
+silent output-phase ticks). Downstream layers (`sound_to_iSMG`, `sound_to_mSTG`)
+already carry biases; a projection bias would be redundant. With `bias=False`, each
+row of `sound_proj.weight` is the learned dense embedding for one phoneme.
+
+**What does not change with the projection enabled:**
+- `phon_tensor` remains 39D one-hot (unchanged from baseline).
+- Motor targets remain 39D one-hot (unchanged from baseline).
+- Motor output remains 39D (unchanged from baseline).
+- Sigmoid activations, copy-back mechanisms, and the full dorsal + ventral
+  architecture are all unchanged.
+- Repetition-only training only.
+
+The projection is **not a replication of any mechanism described in Ueno et al. 2011**.
+It was motivated by the fact that English one-hot phonemes encode no phonological
+structure — `/p/` and `/b/` are orthogonal vectors — while the paper's Japanese mora
+features encode articulatory properties. See `[Open #10]` in §12.
+
+#### Per-epoch loss decomposition diagnostic [Phase 3i]
+
+Phase 3i adds an optional eval-mode pass after each training epoch that decomposes
+motor BCE into four components:
+
+| Component | Phase | Units | What it tracks |
+|-----------|-------|-------|----------------|
+| `avg_eval_input_bce` | Input (ticks 0..T-1) | All motor units | Whether the model suppresses motor during input (all targets = 0) |
+| `avg_eval_output_neg_bce` | Output (ticks T..2T-1) | Negative units (38/39) | Zero-target unit suppression |
+| `avg_eval_output_pos_bce` | Output (ticks T..2T-1) | Positive unit (1/39) | Active phoneme unit activation (target = 1) |
+| `avg_eval_n_active_{input,output_pos,output_neg}` | — | — | Count of units outside the dead zone |
+
+All values are prefixed `avg_eval_` to distinguish them from the online training
+`avg_loss` — they are computed in a separate eval-mode forward pass after each epoch
+with the final epoch weights and do not numerically match the online loss. Enabled by
+default; disable with `--no-log-loss-decomp` for long runs.
+
+### 15.2 Validation
+
+- Projection-specific tests (`tests/test_sound_projection.py`): **17 passed**.
+- Loss decomposition tests (`tests/test_loss_decomposition.py`): **8 passed**.
+- Full test suite: **376 passed**.
+- Smoke runs for both baseline and dense20 completed with finite losses.
+
+### 15.3 Controlled runs (200 words, 50 epochs, seed=0)
+
+Two controlled runs with identical settings except the sound projection:
+
+| Run | Output directory |
+|-----|-----------------|
+| Baseline (no projection) | `outputs/repetition_only_baseline_small_decomp/20260622_015455` |
+| Dense 39→20 (`--sound-proj-size 20`) | `outputs/repetition_only_dense20_small_decomp/20260622_015640` |
+
+**Shared settings:**
+```
+source=words  max_items=200  epochs=50  lr=0.01  seed=0
+zero_error_radius=0.1  eval_radius=0.1  loss_reduction=sum  device=cpu
+```
+
+### 15.4 Results after 50 epochs
+
+| Metric | Baseline | Dense 39→20 | Notes |
+|--------|----------|-------------|-------|
+| Final avg BCE | 20.3011 | 19.8860 | Dense slightly lower |
+| Phoneme argmax accuracy | 0.0476 | 0.0999 | Dense improves phoneme-level ranking |
+| Mean positive unit output | 0.1021 | 0.1197 | Dense slightly stronger |
+| Mean max motor per output tick | 0.1757 | 0.2031 | Dense slightly stronger motor peaks |
+| Output positive threshold acc (> 0.9) | 0.0000 | 0.0000 | No near-saturation phoneme production in either |
+| Exact match | 0/200 | 0/200 | No word-level success |
+| Paper-like word accuracy (output phase) | 0/200 | 0/200 | No strict repetition success |
+
+### 15.5 Loss decomposition at final epoch (eval pass, zero_error_radius=0.1)
+
+| BCE component | Baseline | Dense 39→20 | Notes |
+|---------------|----------|-------------|-------|
+| Input-phase BCE | 0.0206 | 0.0668 | Input silence largely learned in both |
+| Output-negative BCE | 7.3957 | 7.8313 | Negative units still contribute |
+| Output-positive BCE | 14.1906 | 13.6311 | Dominant residual error in both |
+| Active neg / pos units (per trial, after dead-zone) | 50 / 6 | 50 / 6 | Same active unit count |
+
+**Reading the decomposition:** input-phase BCE is near-zero, confirming that the
+model has learned to suppress motor activation during the listening phase. The main
+residual error is in the output-positive component — the single target-1 unit per
+output tick is not being driven toward 1. Output-negative BCE is non-trivial but
+secondary. The active counts (50 negative, 6 positive units per trial on average
+after dead-zone at radius=0.1) tell the same story: many negative units are still
+outside the dead zone, but the dominant unresolved error is on the positive units.
+
+### 15.6 Interpretation
+
+The dense 39→20 projection is technically stable (no NaN, finite losses, all tests
+passing) and produces modest improvements in phoneme argmax accuracy and positive unit
+activation relative to baseline. However, it does not solve repetition. Both baseline
+and dense20 fail at word-level repetition after 50 epochs.
+
+The loss decomposition confirms that the BCE decrease observed in earlier runs
+(§13) is driven primarily by negative-unit suppression and input silence, not by
+positive-unit activation. At the final epoch:
+- Input-phase BCE ≈ 0 — silence is learned.
+- Output-negative BCE has decreased substantially from its initial value.
+- **Output-positive BCE remains by far the largest component.**
+
+The current failure mode appears to be a **low-activation motor-output regime**: the
+model learns to suppress many units, but it does not sufficiently amplify the correct
+positive phoneme unit during the output phase. This is the mechanistic complement of
+the gradient-imbalance analysis in §13: with 38× more zero-target units per tick,
+negative-unit suppression dominates the early gradient signal; by the time positive
+units are the main residual, the learning rate may be too small relative to the
+remaining loss landscape.
+
+The dense projection does not change this regime — the failure mode is the same for
+both variants at 50 epochs.
+
+**Do not report the dense-projection result as an improvement over the paper
+baseline.** The baseline is itself already an adapted run (English one-hot, 50 epochs,
+lr=0.01). The dense-projection run is a further adaptation on top of that. Both are
+diagnostic variants for discussion with Yair, not replication claims.
+
+### 15.7 Next diagnostic: dorsal-only sanity check
+
+A reasonable next diagnostic step is an **explicit dorsal-only variant** implemented
+as an opt-in experimental flag — not as a default model change or a permanent
+replacement for the full architecture. The idea is to test whether the dorsal
+repetition route (sound → iSMG → motor, with motor copy-back) can learn under the
+same repetition loss when the ventral pathway's contribution to motor output
+(`triangularis_to_motor`) is disabled or zeroed.
+
+The motivation: in the full model (Option A), the ventral pathway adds a second input
+to the motor layer that is not driven by a direct phoneme-to-phoneme signal during
+repetition. Removing or zeroing `triangularis_to_motor` would isolate the dorsal
+phonological loop and clarify whether the current failure is specific to the full
+dual-route setup or common to the dorsal pathway alone.
+
+**This should be treated as a diagnostic-only exploration.** It is not a silent model
+correction and must not be presented as a replication of Ueno et al. 2011 (which uses
+the full dual-route architecture). Any dorsal-only run should be discussed with Yair
+before drawing comparative conclusions. See also `[Open #1]` (§12) for the original
+formulation of this option.

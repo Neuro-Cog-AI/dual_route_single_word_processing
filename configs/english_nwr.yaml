@@ -18,6 +18,11 @@ model:
   aSTG_hidden_size: 650         # [Paper]
   triangularis_hidden_size: 200 # [Paper]
   vATL_size: 50                 # [Paper]
+  # sound_proj_size: null      # null = no projection (paper-style direct sound pathway)
+                               # Set to an integer (e.g. 20) for a dense input projection
+                               # that maps 39D one-hot phonemes to N dims before
+                               # sound_to_iSMG and sound_to_mSTG. [Adapted; Open #10]
+                               # Can also be set at runtime with --sound-proj-size N.
 
 # Legacy/reference tick counts required by ModelConfig.
 # These values are from the original Japanese fixed-length setup and are

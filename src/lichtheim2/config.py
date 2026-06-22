@@ -18,6 +18,7 @@ class ModelConfig:
     repetition_ticks: int
     comprehension_ticks: int
     speaking_ticks: int
+    sound_proj_size: int | None = None  # None = no projection (paper pathway) [Phase 3h]
 
 
 def load_config(path: str | Path) -> ModelConfig:
@@ -36,4 +37,5 @@ def load_config(path: str | Path) -> ModelConfig:
         repetition_ticks=t.get("repetition_ticks", 6),
         comprehension_ticks=t.get("comprehension_ticks", 3),
         speaking_ticks=t.get("speaking_ticks", 3),
+        sound_proj_size=m.get("sound_proj_size", None),
     )

@@ -57,6 +57,7 @@ from datetime import datetime
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 import torch.optim as optim
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -383,6 +384,149 @@ def _prediction_summary(preds: list[dict]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Post-epoch eval loss decomposition (Phase 3i diagnostic)
+# ---------------------------------------------------------------------------
+
+
+def _compute_trial_loss_decomposition(
+    tick_results: list,
+    trial: SupervisedTrial,
+    zero_error_radius: float,
+) -> dict:
+    """Decompose motor BCE into phase and positive/negative unit components.
+
+    Called in eval mode under torch.no_grad(); does NOT affect gradients.
+    Applies the same dead-zone logic as losses.py (units inside the dead-zone
+    are excluded from both sums and active counts).
+
+    Phase split: T = trial.phon_tensor.shape[0].
+    Input phase:  ticks 0..T-1  (motor targets are all zero).
+    Output phase: ticks T..2T-1 (motor targets are the phoneme one-hot).
+
+    Returns dict with keys (all per-trial sums, not per-unit averages):
+        input_bce, output_bce           — raw sums of alive BCE by phase
+        motor_bce                       — input_bce + output_bce
+        output_pos_bce                  — alive BCE on the 1 positive unit per output tick
+        output_neg_bce                  — alive BCE on the 38 negative units per output tick
+        n_active_input                  — alive (tick, unit) count in input phase
+        n_active_output_pos             — alive positive-unit count in output phase
+        n_active_output_neg             — alive negative-unit count in output phase
+    """
+    T = trial.phon_tensor.shape[0]
+
+    motor_outputs = torch.stack([r.state.motor for r in tick_results], dim=0)  # (2T, motor_size)
+    motor_targets = trial.motor_targets   # (2T, motor_size)
+
+    raw_bce = F.binary_cross_entropy(motor_outputs, motor_targets, reduction="none")  # (2T, motor_size)
+
+    if zero_error_radius > 0.0:
+        dead  = (motor_outputs - motor_targets).abs() < zero_error_radius
+    else:
+        dead  = torch.zeros_like(raw_bce, dtype=torch.bool)
+    alive = ~dead  # (2T, motor_size)
+
+    # Phase split
+    raw_in,  raw_out  = raw_bce[:T],  raw_bce[T:]
+    alive_in, alive_out = alive[:T], alive[T:]
+
+    # Positive/negative split in output phase (one positive per row)
+    targets_out = motor_targets[T:]   # (T, motor_size)
+    pos_mask    = targets_out >= 0.5  # (T, motor_size): one True per output tick
+    neg_mask    = ~pos_mask
+
+    alive_out_pos = alive_out & pos_mask
+    alive_out_neg = alive_out & neg_mask
+
+    input_bce       = float((raw_in  * alive_in.float()).sum().item())
+    output_pos_bce  = float((raw_out * alive_out_pos.float()).sum().item())
+    output_neg_bce  = float((raw_out * alive_out_neg.float()).sum().item())
+    output_bce      = output_pos_bce + output_neg_bce
+    motor_bce       = input_bce + output_bce
+
+    n_active_input      = int(alive_in.sum().item())
+    n_active_output_pos = int(alive_out_pos.sum().item())
+    n_active_output_neg = int(alive_out_neg.sum().item())
+
+    return {
+        "input_bce":           input_bce,
+        "output_bce":          output_bce,
+        "motor_bce":           motor_bce,
+        "output_pos_bce":      output_pos_bce,
+        "output_neg_bce":      output_neg_bce,
+        "n_active_input":      n_active_input,
+        "n_active_output_pos": n_active_output_pos,
+        "n_active_output_neg": n_active_output_neg,
+    }
+
+
+def _compute_epoch_loss_decomp(
+    model: Lichtheim2Model,
+    trials: list[SupervisedTrial],
+    cfg: ModelConfig,
+    zero_error_radius: float,
+    device: torch.device,
+) -> dict:
+    """Run an eval-mode forward pass over all trials and return mean decomposed metrics.
+
+    This is a POST-EPOCH DIAGNOSTIC PASS — it runs after the online training
+    updates for the epoch have completed. Values reflect the model at the end of
+    the epoch, not during training. Because each trial is re-evaluated with the
+    updated weights (rather than the weights at the time of each online update),
+    these metrics are NOT numerically equal to avg_loss from run_training().
+    They are prefixed 'avg_eval_' to make this distinction explicit.
+
+    Sets model.eval() internally. Caller must restore model.train() afterward.
+    """
+    model.eval()
+
+    keys = [
+        "input_bce", "output_bce", "motor_bce",
+        "output_pos_bce", "output_neg_bce",
+        "n_active_input", "n_active_output_pos", "n_active_output_neg",
+    ]
+    accum = {k: 0.0 for k in keys}
+
+    with torch.no_grad():
+        for trial in trials:
+            trial_dev = move_trial_to_device(trial, device)
+            sem_in    = torch.zeros(cfg.vATL_size, device=device)
+            tick_results = model.run_trial(
+                trial_dev.task, trial_dev.phon_tensor, sem_in, cfg
+            )
+            d = _compute_trial_loss_decomposition(tick_results, trial_dev, zero_error_radius)
+            for k in keys:
+                accum[k] += d[k]
+
+    n = len(trials)
+
+    def _safe_per_active(bce: float, count: float) -> float:
+        return round(bce / count, 6) if count > 0.0 else float("nan")
+
+    avg_input_bce       = round(accum["input_bce"]       / n, 6)
+    avg_output_bce      = round(accum["output_bce"]      / n, 6)
+    avg_motor_bce       = round(accum["motor_bce"]       / n, 6)
+    avg_output_pos_bce  = round(accum["output_pos_bce"]  / n, 6)
+    avg_output_neg_bce  = round(accum["output_neg_bce"]  / n, 6)
+    avg_n_act_in        = round(accum["n_active_input"]      / n, 2)
+    avg_n_act_out_pos   = round(accum["n_active_output_pos"] / n, 2)
+    avg_n_act_out_neg   = round(accum["n_active_output_neg"] / n, 2)
+
+    return {
+        "avg_eval_input_bce":              avg_input_bce,
+        "avg_eval_output_bce":             avg_output_bce,
+        "avg_eval_motor_bce":              avg_motor_bce,
+        "avg_eval_output_pos_bce":         avg_output_pos_bce,
+        "avg_eval_output_neg_bce":         avg_output_neg_bce,
+        "avg_eval_n_active_input":         avg_n_act_in,
+        "avg_eval_n_active_output_pos":    avg_n_act_out_pos,
+        "avg_eval_n_active_output_neg":    avg_n_act_out_neg,
+        "avg_eval_input_bce_per_active":   _safe_per_active(accum["input_bce"],      accum["n_active_input"]),
+        "avg_eval_output_pos_bce_per_active": _safe_per_active(accum["output_pos_bce"], accum["n_active_output_pos"]),
+        "avg_eval_output_neg_bce_per_active": _safe_per_active(accum["output_neg_bce"], accum["n_active_output_neg"]),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Training loop
 # ---------------------------------------------------------------------------
 
@@ -397,11 +541,14 @@ def run_training(
     loss_reduction: str,
     device: torch.device,
     rng: random.Random,
+    log_loss_decomp: bool = True,
 ) -> list[dict]:
     """Online item-by-item training loop.
 
     At each epoch: shuffle trials, call train_step() per item.
     Per-epoch metrics: avg_loss, min_loss, max_loss, n_trials, all_finite.
+    When log_loss_decomp=True, an additional eval-mode pass adds avg_eval_*
+    decomposition keys to each epoch dict (see _compute_epoch_loss_decomp).
 
     [Open #7] Full BPTT through all 2T ticks is used (no truncation).
               loss.backward() is called once per trial after summing tick losses.
@@ -413,6 +560,7 @@ def run_training(
     epoch_metrics: list[dict] = []
 
     for epoch in range(1, epochs + 1):
+        model.train()
         order = list(trials)
         rng.shuffle(order)
         epoch_losses: list[float] = []
@@ -443,6 +591,12 @@ def run_training(
             "n_trials":   len(epoch_losses),
             "all_finite": True,
         }
+
+        if log_loss_decomp:
+            decomp = _compute_epoch_loss_decomp(model, trials, cfg, zero_error_radius, device)
+            model.train()   # restore — eval was set inside _compute_epoch_loss_decomp
+            metrics.update(decomp)
+
         epoch_metrics.append(metrics)
 
         print(
@@ -479,7 +633,15 @@ def save_run_config(
         "zero_error_radius":  args.zero_error_radius,
         "eval_radius":        args.eval_radius,
         "loss_reduction":     args.loss_reduction,
+        "log_loss_decomp":    args.log_loss_decomp,
         "output_dir":         str(run_dir),
+        # Sound input projection fields [Phase 3h]
+        "use_sound_projection":      cfg.sound_proj_size is not None,
+        "sound_proj_size":           cfg.sound_proj_size,
+        "raw_sound_input_size":      cfg.sound_input_size,
+        "effective_sound_input_size": cfg.sound_proj_size if cfg.sound_proj_size is not None else cfg.sound_input_size,
+        "sound_projection_bias":     False if cfg.sound_proj_size is not None else None,
+        "motor_output_size":         cfg.motor_output_size,
         "model_config": {
             "sound_input_size":         cfg.sound_input_size,
             "motor_output_size":        cfg.motor_output_size,
@@ -488,6 +650,7 @@ def save_run_config(
             "aSTG_hidden_size":         cfg.aSTG_hidden_size,
             "triangularis_hidden_size": cfg.triangularis_hidden_size,
             "vATL_size":                cfg.vATL_size,
+            "sound_proj_size":          cfg.sound_proj_size,
         },
     }
     with open(run_dir / "run_config.json", "w") as f:
@@ -614,6 +777,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--sound-proj-size", type=int, default=None, dest="sound_proj_size",
+        help=(
+            "Dense input projection size: maps the 39D one-hot phoneme to N dims "
+            "before sound_to_iSMG and sound_to_mSTG. None (default) = no projection "
+            "(paper-style direct sound pathway). [Adapted — not in Ueno et al. 2011; "
+            "Open #10] Overrides sound_proj_size from the YAML config."
+        ),
+    )
+    p.add_argument(
+        "--log-loss-decomp",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        dest="log_loss_decomp",
+        help=(
+            "Compute phase/unit loss decomposition after each training epoch. "
+            "Adds an eval-mode forward pass over all trials per epoch (~2× wall time). "
+            "Disable with --no-log-loss-decomp for long Jean Zay runs. Default: on."
+        ),
+    )
+    p.add_argument(
         "--output-dir", type=str, default="outputs/repetition_only", dest="output_dir",
         help="Parent output directory; a timestamped subdirectory is created. (default: outputs/repetition_only)",
     )
@@ -631,6 +814,8 @@ def validate_args(args: argparse.Namespace) -> str | None:
         return f"--zero-error-radius must be >= 0, got {args.zero_error_radius}"
     if args.eval_radius < 0.0:
         return f"--eval-radius must be >= 0, got {args.eval_radius}"
+    if args.sound_proj_size is not None and args.sound_proj_size < 1:
+        return f"--sound-proj-size must be >= 1, got {args.sound_proj_size}"
     return None
 
 
@@ -676,7 +861,14 @@ def main(argv: list[str] | None = None) -> int:
     # Step 1: Load config and build model
     # ------------------------------------------------------------------
     print("\n[1/5] Config and model")
-    cfg   = load_config(Path(args.config))
+    cfg = load_config(Path(args.config))
+
+    # CLI --sound-proj-size overrides the YAML value if explicitly provided.
+    # This allows running both baseline and projection experiments from the
+    # same YAML without creating separate config files.
+    if args.sound_proj_size is not None:
+        cfg.sound_proj_size = args.sound_proj_size   # override YAML value
+
     model = Lichtheim2Model(cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Config file:  {args.config}")
@@ -685,6 +877,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  mSTG / aSTG:  {cfg.mSTG_hidden_size} / {cfg.aSTG_hidden_size}")
     print(f"  triangularis: {cfg.triangularis_hidden_size}")
     print(f"  vATL:         {cfg.vATL_size}")
+    if cfg.sound_proj_size is not None:
+        proj_src = " (CLI override)" if args.sound_proj_size is not None else " (from config)"
+        print(f"  sound_proj:   {cfg.sound_input_size}D → {cfg.sound_proj_size}D{proj_src}  [Adapted — not in Ueno et al. 2011; Open #10]")
+    else:
+        print(f"  sound_proj:   none (paper-style direct sound pathway)")
     print(f"  Parameters:   {n_params:,}")
     print(f"  Architecture: FULL Lichtheim2Model (dorsal + ventral) [Open #1]")
 
@@ -761,11 +958,17 @@ def main(argv: list[str] | None = None) -> int:
     # ------------------------------------------------------------------
     # Step 5: Training
     # ------------------------------------------------------------------
+    decomp_status = (
+        "enabled (eval pass each epoch; ~2× wall time)"
+        if args.log_loss_decomp else
+        "disabled (--no-log-loss-decomp)"
+    )
     print(f"\n[5/5] Training")
     print(f"  Optimizer:          SGD, lr={args.lr}")
     print(f"  Loss reduction:     {args.loss_reduction}")
     print(f"  zero_error_radius:  {args.zero_error_radius}  [Open #5: paper=0.1]")
     print(f"  BPTT:               full through 2T ticks per trial  [Open #7]")
+    print(f"  Loss decomp:        {decomp_status}")
     print()
 
     optimizer = optim.SGD(model.parameters(), lr=args.lr)
@@ -777,6 +980,7 @@ def main(argv: list[str] | None = None) -> int:
             loss_reduction=args.loss_reduction,
             device=device,
             rng=rng,
+            log_loss_decomp=args.log_loss_decomp,
         )
     except RuntimeError as exc:
         print(f"\nTraining error: {exc}", file=sys.stderr)
@@ -838,6 +1042,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Mean pos out:        before={s_b['avg_mean_positive_output']:.4f}  →  after={s_a['avg_mean_positive_output']:.4f}")
     print(f"  Exact match:         before={s_b['n_exact']}/{nb}  →  after={s_a['n_exact']}/{na}")
     print(f"  Paper-like word acc: before={s_b['n_output_correct']}/{nb}  →  after={s_a['n_output_correct']}/{na}  (radius={args.eval_radius})  [Open #9]")
+    if args.log_loss_decomp and epoch_metrics:
+        e1 = epoch_metrics[0]
+        ef = epoch_metrics[-1]
+        print(f"  Loss decomp (epoch 1 → final):")
+        print(f"    Input-phase BCE:   {e1['avg_eval_input_bce']:.4f}  →  {ef['avg_eval_input_bce']:.4f}")
+        print(f"    Output-neg BCE:    {e1['avg_eval_output_neg_bce']:.4f}  →  {ef['avg_eval_output_neg_bce']:.4f}")
+        print(f"    Output-pos BCE:    {e1['avg_eval_output_pos_bce']:.4f}  →  {ef['avg_eval_output_pos_bce']:.4f}")
+        print(f"    Active neg/pos after dead-zone (epoch {args.epochs}):  "
+              f"{ef['avg_eval_n_active_output_neg']:.0f} / {ef['avg_eval_n_active_output_pos']:.0f}  per trial")
     print(f"  All losses finite:     YES")
     print(f"  Output dir:            {run_dir}")
 

@@ -32,6 +32,7 @@ class Lichtheim2Model(nn.Module):
     def __init__(self, cfg: "ModelConfig") -> None:
         super().__init__()
         s   = cfg.sound_input_size
+        p   = cfg.sound_proj_size      # None = no projection (paper pathway)
         i   = cfg.iSMG_hidden_size
         mo  = cfg.motor_output_size
         ms  = cfg.mSTG_hidden_size
@@ -39,14 +40,25 @@ class Lichtheim2Model(nn.Module):
         v   = cfg.vATL_size
         t   = cfg.triangularis_hidden_size
 
+        self._sound_input_size = s   # always the raw phoneme dim; used in forward_tick
+
+        # --- Optional dense input projection [Adapted — not in Ueno et al. 2011] ---
+        # Maps the raw one-hot phoneme vector (s,) to a dense (p,) representation
+        # shared by both dorsal and ventral input paths. bias=False: downstream
+        # layers (sound_to_iSMG, sound_to_mSTG) already carry biases; a projection
+        # bias would be redundant. With bias=False each row of sound_proj.weight is
+        # the learned embedding for one phoneme. [Open #10]
+        self.sound_proj = nn.Linear(s, p, bias=False) if p is not None else None
+        s_eff = p if p is not None else s   # effective sound dim fed into iSMG / mSTG
+
         # --- Dorsal pathway ---
-        self.sound_to_iSMG       = nn.Linear(s,  i,  bias=True)   # carries iSMG bias
-        self.iSMG_elman          = nn.Linear(i,  i,  bias=False)   # Elman; no bias [Paper]
-        self.motor_copy_to_iSMG  = nn.Linear(mo, i,  bias=False)   # copy;  no bias [Paper]
-        self.iSMG_to_motor       = nn.Linear(i,  mo, bias=True)    # carries motor bias
+        self.sound_to_iSMG       = nn.Linear(s_eff, i,  bias=True)   # carries iSMG bias
+        self.iSMG_elman          = nn.Linear(i,     i,  bias=False)   # Elman; no bias [Paper]
+        self.motor_copy_to_iSMG  = nn.Linear(mo,    i,  bias=False)   # copy;  no bias [Paper]
+        self.iSMG_to_motor       = nn.Linear(i,     mo, bias=True)    # carries motor bias
 
         # --- Ventral pathway ---
-        self.sound_to_mSTG       = nn.Linear(s,  ms, bias=True)
+        self.sound_to_mSTG       = nn.Linear(s_eff, ms, bias=True)
         self.mSTG_to_aSTG        = nn.Linear(ms, a,  bias=True)    # carries aSTG bias
         self.vATL_in_to_aSTG     = nn.Linear(v,  a,  bias=False)   # copy;  no bias [Paper]
         self.aSTG_to_vATL        = nn.Linear(a,  v,  bias=True)
@@ -69,7 +81,7 @@ class Lichtheim2Model(nn.Module):
         Copy and Elman layers: no bias by construction [Paper]
         """
         # Standard feedforward weights: [−1, 1]
-        for module in (
+        feedforward_modules = [
             self.sound_to_iSMG,
             self.iSMG_to_motor,
             self.sound_to_mSTG,
@@ -77,7 +89,10 @@ class Lichtheim2Model(nn.Module):
             self.aSTG_to_vATL,
             self.aSTG_to_triangularis,
             self.triangularis_to_motor,
-        ):
+        ]
+        if self.sound_proj is not None:
+            feedforward_modules.append(self.sound_proj)  # bias=False; weight-only init
+        for module in feedforward_modules:
             nn.init.uniform_(module.weight, -1.0, 1.0)
             if module.bias is not None:
                 nn.init.constant_(module.bias, -1.0)
@@ -112,14 +127,25 @@ class Lichtheim2Model(nn.Module):
             vATL_input_used is the actual tensor fed into aSTG this tick —
             either state.vATL_context or the external clamp.
         """
-        sound_size = self.sound_to_iSMG.in_features
+        sound_size = self._sound_input_size   # always the raw phoneme dim (e.g. 39)
         device = self.sound_to_iSMG.weight.device
 
         # 1. Resolve inputs
+        if sound is not None and sound.shape[-1] != sound_size:
+            raise ValueError(
+                f"sound.shape[-1]={sound.shape[-1]} != sound_input_size={sound_size}; "
+                "pass the raw phoneme vector, not a pre-projected representation"
+            )
         sound_in = sound if sound is not None else torch.zeros(sound_size, device=device)
         vATL_input_used = (
             clamp_vATL_in if clamp_vATL_in is not None else state.vATL_context
         )
+
+        # 1b. Optional dense input projection [Adapted — not in Ueno et al. 2011]
+        # Projects the raw phoneme vector to a dense representation before both
+        # dorsal and ventral input paths. Zero sound → zero projection (bias=False).
+        if self.sound_proj is not None:
+            sound_in = self.sound_proj(sound_in)   # (sound_size,) → (sound_proj_size,)
 
         # 2. Dorsal: iSMG receives sound + Elman context + motor copy-back [Supp Fig S1]
         iSMG_net = (
