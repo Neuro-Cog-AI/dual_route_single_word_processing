@@ -39,6 +39,7 @@ def train_step(
     zero_error_radius: float = 0.0,
     device: torch.device | str = "cpu",
     loss_reduction: str = "sum",
+    output_positive_weight: float = 1.0,
 ) -> float:
     """Perform one online (item-by-item) training step.
 
@@ -84,6 +85,7 @@ def train_step(
         tick_results, trial_dev,
         zero_error_radius=zero_error_radius,
         loss_reduction=loss_reduction,
+        output_positive_weight=output_positive_weight,
     )
 
     # Apply frequency weight if non-default (avoids touching the computation graph for weight=1.0)

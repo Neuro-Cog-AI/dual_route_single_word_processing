@@ -41,6 +41,7 @@ def compute_trial_loss_breakdown(
     tick_results: list["TickResult"],
     trial: "SupervisedTrial",
     zero_error_radius: float = 0.0,
+    output_positive_weight: float = 1.0,
 ) -> LossBreakdown:
     """Compute per-component loss breakdown for one trial.
 
@@ -79,7 +80,25 @@ def compute_trial_loss_breakdown(
         dead_motor  = (motor_outputs.detach() - trial.motor_targets).abs() < zero_error_radius
         alive_motor = alive_motor & ~dead_motor
 
-    motor_loss     = (raw_motor * alive_motor.float()).sum()
+    # Apply output-phase positive-unit weighting (diagnostic; default=1.0 is exact baseline).
+    # Scoped to REPETITION task, output phase ticks T..2T-1, units with target >= 0.5 only.
+    # Dead zone is applied above first; weighting never resuscitates dead-zoned units.
+    if output_positive_weight != 1.0 and trial.task == Task.REPETITION:
+        T = trial.phon_tensor.shape[0]
+        output_phase_mask = torch.zeros_like(trial.motor_targets, dtype=torch.bool)
+        output_phase_mask[T:, :] = True
+        positive_mask = trial.motor_targets >= 0.5
+        weighted_mask = output_phase_mask & positive_mask
+        weight_motor = torch.ones_like(trial.motor_targets)
+        weight_motor = torch.where(
+            weighted_mask,
+            motor_outputs.new_full(trial.motor_targets.shape, output_positive_weight),
+            weight_motor,
+        )
+        motor_loss = (raw_motor * alive_motor.float() * weight_motor).sum()
+    else:
+        motor_loss = (raw_motor * alive_motor.float()).sum()
+
     n_active_motor = int(alive_motor.sum().item())
 
     # -- Semantic loss (comprehension only; None for repetition / speaking) --
@@ -126,6 +145,7 @@ def compute_trial_loss(
     trial: "SupervisedTrial",
     zero_error_radius: float = 0.0,
     loss_reduction: str = "sum",
+    output_positive_weight: float = 1.0,
 ) -> torch.Tensor:
     """Compute combined motor + semantic binary cross-entropy loss for one trial.
 
@@ -163,7 +183,9 @@ def compute_trial_loss(
     Returns:
         Scalar tensor with .requires_grad=True (gradient flows back to model params).
     """
-    breakdown = compute_trial_loss_breakdown(tick_results, trial, zero_error_radius)
+    breakdown = compute_trial_loss_breakdown(
+        tick_results, trial, zero_error_radius, output_positive_weight
+    )
     if loss_reduction == "sum":
         return breakdown.total_loss
     elif loss_reduction == "mean_active":

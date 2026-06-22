@@ -542,6 +542,7 @@ def run_training(
     device: torch.device,
     rng: random.Random,
     log_loss_decomp: bool = True,
+    output_positive_weight: float = 1.0,
 ) -> list[dict]:
     """Online item-by-item training loop.
 
@@ -571,6 +572,7 @@ def run_training(
                 zero_error_radius=zero_error_radius,
                 device=device,
                 loss_reduction=loss_reduction,
+                output_positive_weight=output_positive_weight,
             )
             if not math.isfinite(loss_val):
                 raise RuntimeError(
@@ -636,6 +638,8 @@ def save_run_config(
         "log_loss_decomp":    args.log_loss_decomp,
         "dorsal_motor_only":  cfg.dorsal_motor_only,
         "motor_readout_mode": "dorsal_only" if cfg.dorsal_motor_only else "full",
+        "output_positive_weight": args.output_positive_weight,
+        "loss_variant":           "output_positive_weighted" if args.output_positive_weight != 1.0 else "standard_bce",
         "output_dir":         str(run_dir),
         # Sound input projection fields [Phase 3h]
         "use_sound_projection":      cfg.sound_proj_size is not None,
@@ -800,6 +804,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--output-positive-weight",
+        type=float,
+        default=1.0,
+        dest="output_positive_weight",
+        help=(
+            "Diagnostic: multiply the training loss on output-phase motor units whose "
+            "target=1 (the positive phoneme unit) by this factor. Scoped to REPETITION "
+            "task, output phase ticks T..2T-1, units with target >= 0.5. "
+            "1.0 = standard BCE (default). Values > 1 increase gradient on the correct "
+            "phoneme unit. Must be > 0. Not a faithful Ueno et al. 2011 variant. "
+            "[Phase 3k diagnostic]"
+        ),
+    )
+    p.add_argument(
         "--log-loss-decomp",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -830,6 +848,8 @@ def validate_args(args: argparse.Namespace) -> str | None:
         return f"--eval-radius must be >= 0, got {args.eval_radius}"
     if args.sound_proj_size is not None and args.sound_proj_size < 1:
         return f"--sound-proj-size must be >= 1, got {args.sound_proj_size}"
+    if args.output_positive_weight <= 0.0:
+        return f"--output-positive-weight must be > 0, got {args.output_positive_weight}"
     return None
 
 
@@ -993,6 +1013,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  zero_error_radius:  {args.zero_error_radius}  [Open #5: paper=0.1]")
     print(f"  BPTT:               full through 2T ticks per trial  [Open #7]")
     print(f"  motor_readout:      {'dorsal only (diagnostic)' if args.dorsal_motor_only else 'full iSMG + triangularis'}")
+    pos_weight_label = (
+        f"{args.output_positive_weight}  [diagnostic; output-phase target=1 units upweighted]"
+        if args.output_positive_weight != 1.0 else
+        "1.0  (baseline standard BCE)"
+    )
+    print(f"  output_positive_weight: {pos_weight_label}")
     print(f"  Loss decomp:        {decomp_status}")
     print()
 
@@ -1006,6 +1032,7 @@ def main(argv: list[str] | None = None) -> int:
             device=device,
             rng=rng,
             log_loss_decomp=args.log_loss_decomp,
+            output_positive_weight=args.output_positive_weight,
         )
     except RuntimeError as exc:
         print(f"\nTraining error: {exc}", file=sys.stderr)

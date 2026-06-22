@@ -865,3 +865,278 @@ motor_readout:    dorsal only (diagnostic; triangularis_to_motor disabled)
 architecturally faithful to Ueno et al. 2011, and neither is the English one-hot
 encoding. All comparisons are within-adaptation-space and should be framed as
 diagnostic observations, not model validation results.
+
+---
+
+## 17. Diagnostic: output-phase positive-unit loss weighting (Phase 3k)
+
+### 17.1 What this is and what it is not
+
+**This is not the Lichtheim 2 model.** It is a training-objective diagnostic
+implemented as an opt-in scalar weight (default 1.0 = unweighted BCE, identical to
+the baseline code path). All comparison runs using `output_positive_weight > 1` are
+explicitly labelled diagnostic variants and must not be reported as replications of
+Ueno et al. 2011.
+
+The flag addresses one specific question: can amplifying the gradient on the single
+correct-phoneme unit per output tick break the low-activation motor-output regime
+identified in §15.6?
+
+**Motivation.** In the current failure mode, 38 zero-target units compete with 1
+positive-target unit per output tick. With `zero_error_radius=0.1`, negative units
+enter the dead zone quickly (their gradient disappears once output < 0.1), but the
+positive unit — initially around 0.5 — has a large residual error (`|output−1|≈0.5`)
+that never enters the dead zone. However, its *gradient contribution* to the total
+loss is diluted by the 77× more numerous zero-target units across the full 2T ticks.
+
+The `output_positive_weight` parameter multiplies the BCE loss for the one positive
+unit per output tick by a factor `w > 1`, increasing its gradient relative to the
+negative units — without touching the negative-unit loss, the dead zone, or any
+architectural parameters.
+
+### 17.2 Technical description
+
+Enable with `--output-positive-weight W` (float, default 1.0). Scoping rules:
+
+- **Task**: applies only when `trial.task == Task.REPETITION`.
+- **Phase**: applies only to output-phase ticks (indices T..2T-1), never input-phase.
+- **Unit**: applies only to units with `motor_target >= 0.5` (the one-hot active unit).
+- **Dead zone**: applied first; the weight multiplier never resuscitates dead-zoned units.
+
+When `output_positive_weight=1.0` (default), the `if` branch is never entered and
+the code path is byte-for-byte identical to the previous baseline.
+
+Implementation inside `compute_trial_loss_breakdown` (after building `alive_motor`):
+
+```python
+if output_positive_weight != 1.0 and trial.task == Task.REPETITION:
+    T = trial.phon_tensor.shape[0]
+    output_phase_mask = torch.zeros_like(trial.motor_targets, dtype=torch.bool)
+    output_phase_mask[T:, :] = True
+    positive_mask = trial.motor_targets >= 0.5
+    weighted_mask = output_phase_mask & positive_mask
+    weight_motor = torch.ones_like(trial.motor_targets)
+    weight_motor = torch.where(
+        weighted_mask,
+        motor_outputs.new_full(trial.motor_targets.shape, output_positive_weight),
+        weight_motor,
+    )
+    motor_loss = (raw_motor * alive_motor.float() * weight_motor).sum()
+else:
+    motor_loss = (raw_motor * alive_motor.float()).sum()
+```
+
+**What does NOT change:**
+- Negative-unit BCE (target < 0.5) — unchanged in all phases.
+- Input-phase BCE — target = 0 everywhere, so no positive units exist there.
+- Post-epoch eval decomposition (`_compute_epoch_loss_decomp`) — uses a separate
+  code path (`_compute_trial_loss_decomposition`, which always uses unweighted BCE).
+  Eval metrics (`avg_eval_output_pos_bce`, etc.) are always comparable across runs
+  regardless of training weight.
+- Model architecture, copy-back, sigmoid, motor targets, trial construction.
+- SPEAKING trials — `trial.task != Task.REPETITION` → weight branch never taken.
+
+### 17.3 How to enable
+
+CLI flag (float, default 1.0):
+```bash
+--output-positive-weight 5.0
+```
+
+Can be combined with `--sound-proj-size N` and/or `--dorsal-motor-only`. Example:
+```bash
+PYTHONPATH=src python scripts/train_repetition_only.py \
+  --data-dir data/raw/nwr_swp --config configs/english_nwr.yaml \
+  --source words --max-items 200 --epochs 50 --lr 0.01 \
+  --device cpu --seed 0 --zero-error-radius 0.1 --eval-radius 0.1 \
+  --loss-reduction sum --output-positive-weight 5.0 \
+  --output-dir outputs/repetition_only_posw5_200
+```
+
+The terminal `[5/5]` header shows:
+```
+output_positive_weight: 5.0  [diagnostic; output-phase target=1 units upweighted]
+```
+(or `1.0  (baseline standard BCE)` at default).
+
+The `run_config.json` for each run records:
+```json
+"output_positive_weight": 5.0,
+"loss_variant": "output_positive_weighted"
+```
+(or `1.0` / `"standard_bce"` at default).
+
+### 17.4 Risks and scientific notes
+
+- **Loss scale changes**: with `output_positive_weight=W`, total loss is larger by
+  up to `W × T × BCE_per_positive_unit`. This may interact with learning rate;
+  smoke runs should confirm no NaN/divergence.
+- **Gradient imbalance shifts**: upweighting the positive unit shifts the effective
+  gradient ratio from ~77:1 (zero:positive targets) toward a lower ratio. Whether
+  this crosses a threshold to cause reliable positive-unit activation vs. instability
+  is empirical.
+- **Not paper behavior**: the paper uses unweighted BCE. This is explicitly a
+  diagnostic. Label all results accordingly and discuss with Yair.
+- **Eval metrics remain unweighted**: `avg_eval_output_pos_bce` is always computed
+  with `output_positive_weight=1.0` regardless of training weight. This ensures that
+  eval decomposition values are comparable across runs.
+
+### 17.5 Interpretation guide
+
+| Outcome | Interpretation |
+|---------|---------------|
+| Higher weight → mean_positive_output rises significantly | Gradient amplification on the positive unit is sufficient to break the suppression regime; consider a sweep of weight values |
+| Higher weight → instability or NaN | Learning rate (0.01) too high relative to the amplified loss scale; try lower lr |
+| Higher weight → no improvement in mean_positive_output | The bottleneck is not gradient imbalance per se; may be learning rate, BPTT dynamics, or architecture capacity |
+
+**Do not report these results as model validation.** Any run with
+`output_positive_weight != 1.0` is labelled `loss_variant: output_positive_weighted`
+in `run_config.json` and must be discussed with Yair before comparative
+interpretation.
+
+---
+
+## 18. Output-positive weighting and learning-rate stabilization (Phase 3k results)
+
+### 18.1 Prior diagnostic results — the low-activation regime
+
+Before the output-positive weighting runs, all controlled variants (baseline, dense20,
+dorsal-motor-only) shared the same failure mode after 50 epochs:
+
+- Exact match: **0/200**; paper-like word accuracy: **0/200**.
+- Output-positive BCE was the dominant residual loss component in all variants.
+- `mean_positive_output` stayed well below 0.5 — the model entered and remained in
+  a low-activation motor-output regime.
+- Dense20 improved phoneme argmax accuracy (0.05 → 0.10) and mean positive output
+  slightly, but did not escape the regime.
+- Dorsal-motor-only also provided only marginal improvement.
+
+The decomposition confirmed (§15.5–15.6): input silence was largely learned, negative
+units were being suppressed, but the single positive phoneme unit per output tick was
+not being driven toward 1. The hypothesis was that gradient imbalance — 38 negative
+zero-target units vs. 1 positive unit per tick — was suppressing the positive gradient
+early enough to leave the model stuck.
+
+### 18.2 Output-positive weighting — controlled 50-epoch runs (200 words)
+
+**Shared settings:** `source=words  max_items=200  epochs=50  lr=0.01  seed=0`
+`zero_error_radius=0.1  eval_radius=0.1  loss_reduction=sum  sound_proj_size=20  device=cpu`
+
+| Configuration | Epochs | lr | Phoneme argmax acc | Mean pos. output | Mean max motor | Output pos > 0.9 | Exact match | Paper-like word acc | Output-pos BCE | Output-neg BCE |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Dense20 + posw1.5 | 50 | 0.01 | 0.2204 | 0.1906 | 0.3410 | 0.0000 | 0/200 | 0/200 | 11.9678 | 9.9335 |
+| Dense20 + posw2.0 | 50 | 0.01 | 0.3066 | 0.3023 | 0.4930 | 0.0039 | 0/200 | 0/200 | 9.4314 | 13.0921 |
+| Dense20 + posw3.0 | 50 | 0.01 | 0.3677 | 0.4639 | 0.6747 | 0.0746 | 2/200 | 0/200 | 6.9146 | 18.7929 |
+
+**Reading the table:**
+
+- Increasing `output_positive_weight` monotonically improves phoneme argmax accuracy
+  and mean positive unit activation: `posw3` is the first setting to show non-zero exact
+  match (2/200) and non-zero strong positive activation (`output_pos > 0.9` fraction: 0.075).
+- A clear selectivity trade-off is visible: as `output_positive_weight` rises, output-positive
+  BCE falls while output-negative BCE rises. The model is learning to activate the positive
+  unit but at the cost of partially suppressing fewer negative units — the gradient balance
+  has shifted, but at the expense of global precision.
+- Paper-like word accuracy (all units within `eval_radius=0.1`) remains 0/200 across all three
+  settings: strict whole-word accuracy under the radius criterion is not yet achieved.
+
+### 18.3 Learning-rate comparison — 150-epoch runs (200 words, dense20 + posw3)
+
+With `posw3` identified as the first setting to produce meaningful positive activation, a 150-epoch
+learning-rate comparison was run. All other settings were fixed.
+
+**Shared settings:** `source=words  max_items=200  epochs=150  seed=0  zero_error_radius=0.1`
+`eval_radius=0.1  loss_reduction=sum  sound_proj_size=20  output_positive_weight=3.0  device=cpu`
+
+| Configuration | Epochs | lr | Phoneme argmax acc | Mean pos. output | Mean max motor | Output pos > 0.9 | Exact match | Paper-like word acc | Output-pos BCE | Output-neg BCE | Input BCE |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Dense20 + posw3 | 150 | 0.01 | 0.4193 | 0.5224 | 0.7495 | 0.1597 | 6/200 | 0/200 | 6.3210 | 15.3653 | 0.0269 |
+| Dense20 + posw3 | 150 | 0.005 | **0.8191** | **0.7296** | 0.7717 | 0.2675 | **79/200** | 0/200 | **2.4654** | 8.8548 | 0.1444 |
+| Dense20 + posw3 | 150 | 0.003 | 0.6480 | 0.5922 | 0.6777 | 0.1054 | 25/200 | 0/200 | 4.2621 | 11.7648 | 0.1087 |
+
+Output directories:
+
+| Run | Output directory |
+|-----|-----------------|
+| lr=0.01 | `outputs/repetition_only_dense20_posw3_150ep_200/20260622_165214` |
+| lr=0.005 | `outputs/repetition_only_dense20_posw3_lr005_150ep_200/20260622_165839` |
+| lr=0.003 | `outputs/repetition_only_dense20_posw3_lr003_150ep_200/20260622_172616` |
+
+**Reading the table:**
+
+- `lr=0.005` is substantially better than both `lr=0.01` and `lr=0.003` at 150 epochs.
+  It is the first diagnostic setting to produce substantial repetition-like learning:
+  phoneme argmax accuracy reaches **0.8191** and exact whole-word match reaches **79/200**.
+- `lr=0.01` converges faster early but reaches a worse local attractor at 150 epochs than
+  `lr=0.005`; 6/200 exact matches vs. 79/200.
+- `lr=0.003` is slower and also outperformed by `lr=0.005`; the curve appears under-trained
+  at 150 epochs.
+- The `lr=0.005` run also shows a lower output-negative BCE (8.85 vs. 15.37 at lr=0.01),
+  suggesting better overall selectivity, not just stronger positive activation.
+- Input BCE is slightly higher for `lr=0.005` than `lr=0.01` (0.144 vs. 0.027), indicating
+  slightly less perfect input silence — a minor trade-off.
+- **Paper-like word accuracy remains 0/200 in all three runs.** The model escapes the
+  low-activation regime, but does not yet satisfy the strict all-units-within-radius criterion.
+
+### 18.4 Main conclusion
+
+The best diagnostic setting so far is **dense20 + full motor readout + `output_positive_weight=3.0`
++ `lr=0.005` for 150 epochs**. This is the first setting that shows substantial
+repetition learning: phoneme argmax accuracy reaches **0.8191** and exact whole-word
+match reaches **79/200**. The model also escapes the previous low-activation regime,
+with mean positive output rising to **0.7296** and output-positive BCE dropping to
+**2.4654**.
+
+However, this is still not a faithful Ueno-style result: **paper-like word accuracy
+remains 0/200** under the current radius-based criterion (`eval_radius=0.1`, all motor
+units within radius on all output-phase ticks). The model is learning useful output
+rankings and producing stronger motor activations, but strict all-units-within-radius
+repetition is still unsolved.
+
+This result is informative because it **localizes the failure mode**: the model can
+learn repetition-like behavior when the training objective gives sufficient pressure to
+output-positive units, suggesting that the original low-activation failure was at least
+partly optimization- and loss-imbalance-driven rather than a fundamental architectural
+limitation.
+
+**Scientific caution:** these are diagnostic training adaptations. `output_positive_weight`,
+`sound_proj_size`, and the learning rate chosen here (0.005) are not settings from
+Ueno et al. 2011. These results should not be presented as a faithful reproduction of
+the paper's training dynamics without discussion with Yair.
+
+### 18.5 Interpretation summary
+
+| Intervention | Effect |
+|---|---|
+| Dense 39→20 projection alone | Modest improvement in phoneme argmax (~0.05→0.10) and mean positive output; did not escape low-activation regime |
+| Dorsal-motor-only | Marginal improvement; did not solve the regime |
+| `output_positive_weight > 1` | First intervention to clearly break the low-activation regime; positive activation rises monotonically with weight |
+| Lower lr (0.01→0.005) with posw3 | Decisive: 6→79 exact matches at 150 epochs; much better overall |
+| lr=0.003 vs. 0.005 | Under-trained at 150 epochs; 0.005 is the better choice |
+
+**What remains unsolved:** strict output selectivity. Positives are stronger, but
+not all words satisfy the all-units-within-radius paper-like criterion. The remaining
+bottleneck appears to be output precision: some positive units are not yet above
+`eval_radius` from their target of 1.0, and/or some negative units are not yet below
+`eval_radius` from their target of 0.0, causing 0/200 on the paper-like criterion even
+while 79/200 exact matches (argmax-based) are achieved.
+
+### 18.6 Suggested next steps
+
+1. **Discuss with Yair** whether `output_positive_weight` is acceptable as a diagnostic
+   only, or whether we should search for a more faithful explanation of how the original
+   paper's model avoided this gradient-imbalance problem (e.g. initialization, learning
+   rate schedule, LENS-specific training dynamics, or mora-based phonology that avoids
+   the 39-dimensional one-hot sparsity).
+
+2. **Inspect predictions from the best run** (`lr=0.005`, 150 epochs, 79/200 exact match):
+   - Which 79 words are exact matches? Are they shorter or higher-frequency?
+   - Where does the paper-like radius criterion fail — are positives not above `1 − eval_radius`,
+     negatives not below `eval_radius`, or both?
+   - Are timing mismatches contributing (e.g. correct phoneme but off by one tick)?
+
+3. **Consider scaling to more items** with the best diagnostic setting:
+   - `max_items=1200`, `epochs=150 or 200`, `lr=0.005`, `sound_proj_size=20`,
+     `output_positive_weight=3.0`.
+   - Clearly label this as a diagnostic run, not a paper replication.
+   - Monitor for overfitting and gradient stability at 1200 items.
