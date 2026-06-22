@@ -41,6 +41,7 @@ class Lichtheim2Model(nn.Module):
         t   = cfg.triangularis_hidden_size
 
         self._sound_input_size = s   # always the raw phoneme dim; used in forward_tick
+        self.dorsal_motor_only = cfg.dorsal_motor_only  # [Phase 3j diagnostic]
 
         # --- Optional dense input projection [Adapted — not in Ueno et al. 2011] ---
         # Maps the raw one-hot phoneme vector (s,) to a dense (p,) representation
@@ -169,10 +170,17 @@ class Lichtheim2Model(nn.Module):
         new_triangularis = torch.sigmoid(self.aSTG_to_triangularis(new_aSTG))
 
         # 5. Motor: both pathways converge on insular-motor cortex [Paper Fig 1]
-        motor_net = (
-            self.iSMG_to_motor(new_iSMG)
-            + self.triangularis_to_motor(new_triangularis)
-        )
+        # When dorsal_motor_only=True (diagnostic), triangularis_to_motor is excluded
+        # from motor_net. The ventral pathway above is still fully computed each tick.
+        # triangularis_to_motor receives no gradient in this mode (disconnected from loss).
+        # [Phase 3j diagnostic — not in Ueno et al. 2011]
+        if self.dorsal_motor_only:
+            motor_net = self.iSMG_to_motor(new_iSMG)
+        else:
+            motor_net = (
+                self.iSMG_to_motor(new_iSMG)
+                + self.triangularis_to_motor(new_triangularis)
+            )
         new_motor = torch.sigmoid(motor_net)
 
         # 6. Copy-back update — context fields set at end of tick [Supp Fig S1]

@@ -634,6 +634,8 @@ def save_run_config(
         "eval_radius":        args.eval_radius,
         "loss_reduction":     args.loss_reduction,
         "log_loss_decomp":    args.log_loss_decomp,
+        "dorsal_motor_only":  cfg.dorsal_motor_only,
+        "motor_readout_mode": "dorsal_only" if cfg.dorsal_motor_only else "full",
         "output_dir":         str(run_dir),
         # Sound input projection fields [Phase 3h]
         "use_sound_projection":      cfg.sound_proj_size is not None,
@@ -786,6 +788,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--dorsal-motor-only",
+        action="store_true",
+        default=False,
+        dest="dorsal_motor_only",
+        help=(
+            "Diagnostic: exclude triangularis_to_motor from motor readout. "
+            "The full ventral pathway is still computed each tick; only the "
+            "motor_net summation changes. Not a faithful Lichtheim 2 variant. "
+            "Discuss results with Yair before drawing conclusions. Default: off."
+        ),
+    )
+    p.add_argument(
         "--log-loss-decomp",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -869,6 +883,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.sound_proj_size is not None:
         cfg.sound_proj_size = args.sound_proj_size   # override YAML value
 
+    # CLI --dorsal-motor-only overrides YAML value when flag is present. [Phase 3j]
+    if args.dorsal_motor_only:
+        cfg.dorsal_motor_only = True   # CLI override [Phase 3j diagnostic]
+
     model = Lichtheim2Model(cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Config file:  {args.config}")
@@ -882,6 +900,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  sound_proj:   {cfg.sound_input_size}D → {cfg.sound_proj_size}D{proj_src}  [Adapted — not in Ueno et al. 2011; Open #10]")
     else:
         print(f"  sound_proj:   none (paper-style direct sound pathway)")
+    readout_label = (
+        "dorsal only (diagnostic; triangularis_to_motor disabled)"
+        if cfg.dorsal_motor_only else
+        "full iSMG + triangularis  [Paper Fig 1]"
+    )
+    print(f"  motor_readout:    {readout_label}")
     print(f"  Parameters:   {n_params:,}")
     print(f"  Architecture: FULL Lichtheim2Model (dorsal + ventral) [Open #1]")
 
@@ -968,6 +992,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Loss reduction:     {args.loss_reduction}")
     print(f"  zero_error_radius:  {args.zero_error_radius}  [Open #5: paper=0.1]")
     print(f"  BPTT:               full through 2T ticks per trial  [Open #7]")
+    print(f"  motor_readout:      {'dorsal only (diagnostic)' if args.dorsal_motor_only else 'full iSMG + triangularis'}")
     print(f"  Loss decomp:        {decomp_status}")
     print()
 

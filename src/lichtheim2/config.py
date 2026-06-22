@@ -19,6 +19,7 @@ class ModelConfig:
     comprehension_ticks: int
     speaking_ticks: int
     sound_proj_size: int | None = None  # None = no projection (paper pathway) [Phase 3h]
+    dorsal_motor_only: bool = False     # diagnostic: exclude triangularis_to_motor from motor_net [Phase 3j]
 
 
 def load_config(path: str | Path) -> ModelConfig:
@@ -38,4 +39,5 @@ def load_config(path: str | Path) -> ModelConfig:
         comprehension_ticks=t.get("comprehension_ticks", 3),
         speaking_ticks=t.get("speaking_ticks", 3),
         sound_proj_size=m.get("sound_proj_size", None),
+        dorsal_motor_only=m.get("dorsal_motor_only", False),
     )

@@ -775,3 +775,93 @@ correction and must not be presented as a replication of Ueno et al. 2011 (which
 the full dual-route architecture). Any dorsal-only run should be discussed with Yair
 before drawing comparative conclusions. See also `[Open #1]` (§12) for the original
 formulation of this option.
+
+---
+
+## 16. Diagnostic: dorsal-motor-only motor readout (Phase 3j)
+
+### 16.1 What this is and what it is not
+
+**This is not the Lichtheim 2 model.** It is a debugging sanity check implemented as
+an opt-in flag. The full dual-route architecture remains the reference model. Results
+from dorsal-motor-only runs must be interpreted as diagnostic only and discussed with
+Yair before drawing scientific conclusions.
+
+The flag addresses one specific question: does the `triangularis_to_motor` connection
+help or hinder repetition learning? Removing it from the motor readout isolates whether
+the dorsal iSMG→motor route can, on its own, learn to map phoneme input to motor
+output under the repetition loss.
+
+### 16.2 Technical description
+
+Enable with `--dorsal-motor-only`. Effect on `Lichtheim2Model.forward_tick`:
+
+**Full model (default, `dorsal_motor_only=False`):**
+```
+motor_net = iSMG_to_motor(new_iSMG) + triangularis_to_motor(new_triangularis)
+new_motor = sigmoid(motor_net)
+```
+
+**Dorsal-motor-only diagnostic (`dorsal_motor_only=True`):**
+```
+motor_net = iSMG_to_motor(new_iSMG)
+new_motor = sigmoid(motor_net)
+```
+
+**What is still computed in dorsal-motor-only mode:**
+- The full ventral pathway: `new_mSTG`, `new_aSTG`, `new_vATL_out`, `new_triangularis`
+- All copy-back mechanisms (iSMG Elman, motor copy-back to iSMG, vATL context)
+- The `triangularis_to_motor` weight matrix (still initialized; simply not added to `motor_net`)
+
+**What changes:**
+- `triangularis_to_motor` is excluded from `motor_net` → excluded from the loss → receives
+  no gradient during dorsal-motor-only training. Ventral pathway weights (`aSTG_to_triangularis`,
+  `mSTG_to_aSTG`, `sound_to_mSTG`) also receive no gradient through the motor path, since
+  the connection to the loss is severed at `triangularis_to_motor`.
+
+When `dorsal_motor_only=False` (the default), the model is numerically/behaviorally
+equivalent to the previous full model — the new conditional adds no overhead to the
+default code path.
+
+### 16.3 How to enable
+
+CLI flag (boolean, off by default):
+```bash
+--dorsal-motor-only
+```
+
+Can be combined with `--sound-proj-size N` (dense projection) for a 2×2 experimental
+matrix. Example:
+```bash
+PYTHONPATH=src python scripts/train_repetition_only.py \
+  --data-dir data/raw/nwr_swp --config configs/english_nwr.yaml \
+  --source words --max-items 200 --epochs 50 --lr 0.01 \
+  --device cpu --seed 0 --zero-error-radius 0.1 --eval-radius 0.1 \
+  --loss-reduction sum --dorsal-motor-only \
+  --output-dir outputs/repetition_only_dorsal_motor_200
+```
+
+The `run_config.json` for each run records:
+```json
+"dorsal_motor_only": true,
+"motor_readout_mode": "dorsal_only"
+```
+(or `false` / `"full"` for the default).
+
+The terminal output in `[1/5]` and `[5/5]` shows:
+```
+motor_readout:    dorsal only (diagnostic; triangularis_to_motor disabled)
+```
+
+### 16.4 Interpretation guide
+
+| Outcome | Interpretation |
+|---------|---------------|
+| Dorsal-only learns faster / achieves higher phoneme acc | The `triangularis_to_motor` contribution in the full model interferes with repetition; the dorsal route is sufficient for this task |
+| Dorsal-only learns similarly to full model | The ventral motor contribution is neutral for repetition; bottleneck is elsewhere (e.g. learning rate, BPTT dynamics, loss imbalance) |
+| Dorsal-only fails similarly or worse | The dorsal route alone is not sufficient; the ventral contribution (even if suboptimal) provides a useful signal |
+
+**Do not over-interpret these comparisons.** The dorsal-motor-only variant is not
+architecturally faithful to Ueno et al. 2011, and neither is the English one-hot
+encoding. All comparisons are within-adaptation-space and should be framed as
+diagnostic observations, not model validation results.
