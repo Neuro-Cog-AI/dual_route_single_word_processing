@@ -1140,3 +1140,141 @@ while 79/200 exact matches (argmax-based) are achieved.
      `output_positive_weight=3.0`.
    - Clearly label this as a diagnostic run, not a paper replication.
    - Monitor for overfitting and gradient stability at 1200 items.
+
+---
+
+## 19. First diagnostic full-set solution (500-epoch run, Phase 3k)
+
+### 19.1 Run configuration
+
+The same best diagnostic setting from §18 was extended to 500 epochs:
+
+```
+Run directory:      outputs/repetition_only_dense20_posw3_lr005_500ep_200/20260622_213921
+max_items:          200
+epochs:             500
+lr:                 0.005
+sound_proj_size:    20         [dense 39→20 projection, not in Ueno et al. 2011]
+output_positive_weight: 3.0   [diagnostic loss weighting, not in Ueno et al. 2011]
+loss_reduction:     sum
+zero_error_radius:  0.1
+eval_radius:        0.1
+seed:               0
+motor_readout:      full  (iSMG + triangularis)
+```
+
+### 19.2 Final metrics
+
+| Metric | Value |
+|---|---|
+| Phoneme argmax accuracy | **1.0000** |
+| Threshold accuracy (mixed) | **1.0000** |
+| Whole-word exact match | **200/200** |
+| Input silence threshold acc | **1.0000** |
+| Output negative threshold acc | **1.0000** |
+| Output positive threshold acc | **1.0000** |
+| Mean positive output | **0.9384** |
+| Mean negative output | **0.0058** |
+| Mean max motor output | **0.9384** |
+| Output phase all-within-radius | **200/200** |
+| Input phase all-silent | **200/200** |
+| Strict trial (input + output) | **200/200** |
+| **Paper-like word accuracy** | **200/200** |
+| Final avg loss | **0.000000** |
+| Input-phase BCE | **0.0000** |
+| Output-negative BCE | **0.0000** |
+| Output-positive BCE | **0.0000** |
+| Active neg / pos after dead-zone | **0 / 0 per trial** |
+
+### 19.3 Interpretation
+
+This is the first diagnostic setting that fully solves the 200-word repetition
+subset under the current radius-based criterion (`eval_radius=0.1`,
+all-units-within-radius on the output phase).
+
+This should not be described as a faithful Ueno et al. 2011 reproduction, because
+the setting uses diagnostic adaptations that are not in the original paper: a dense
+39→20 sound input projection (`sound_proj_size=20`) and explicit output-positive
+loss weighting (`output_positive_weight=3.0`). Both adaptations were introduced to
+address the low-activation motor-output regime identified in earlier diagnostic runs
+(§15.6, §18.1) and must be labelled as such in any presentation or report.
+
+**Why does the final loss reach zero?**
+The final zero loss does not mean that raw BCE is mathematically zero. It occurs
+because `zero_error_radius=0.1` masks all supervised units once they fall within the
+target radius: units with `|output − target| < 0.1` contribute zero loss (they enter
+the dead zone). At epoch 500, the active neg/pos count after the dead-zone is 0/0
+per trial, meaning every supervised unit in every word has converged within radius
+of its target. This is consistent with the 200/200 strict-trial result and the
+threshold accuracy figures of 1.0000 — it is the correct and expected outcome once
+the model fully solves the radius-based criterion.
+
+**Training dynamics.**
+The 500-epoch trajectory is not uniformly smooth. Transient instability — visible
+as loss spikes — was observed around the mid-training phase. The model eventually
+recovers from these spikes and converges to full radius-based success by epoch 500.
+This suggests the learning rate (0.005) is at or near the upper boundary of
+stability for this setting; further stabilization experiments (lr warmup, lower lr)
+may be warranted before scaling.
+
+### 19.4 Comparison table: diagnostic run progression
+
+| Configuration | Epochs | lr | Phoneme acc | Exact match | Paper-like word acc | Mean pos out | Mean neg out | Output-pos BCE | Output-neg BCE |
+|---|---|---|---|---|---|---|---|---|---|
+| Dense20 + posw3 | 150 | 0.005 | 0.8191 | 79/200 | 0/200 | 0.7296 | 0.0409 | 2.4654 | 8.8548 |
+| Dense20 + posw3 | 300 | 0.005 | 0.9963 | 194/200 | 1/200 | 0.8940 | 0.0126 | 0.5641 | 1.7823 |
+| Dense20 + posw3 | 500 | 0.005 | **1.0000** | **200/200** | **200/200** | **0.9384** | **0.0058** | **0.0000** | **0.0000** |
+
+The progression is monotone across all three checkpoints: phoneme accuracy, exact
+match, paper-like word accuracy, mean positive output, and output-positive BCE all
+improve consistently from 150 → 300 → 500 epochs. The gap between 300-epoch
+(194/200 exact, 1/200 paper-like) and 500-epoch (200/200 both) narrows the
+bottleneck identified in the prediction error analysis (§19.5 below): the remaining
+6 exact-match failures at 300 epochs, and the widespread below-threshold positive
+activations, are resolved by continued training.
+
+### 19.5 Main conclusion
+
+The result shows that the current PyTorch implementation can learn strict repetition
+on the 200-word subset when the low-activation regime is addressed by diagnostic
+objective and representation changes. The remaining scientific questions are:
+
+- whether this convergence can be made faithful to the original Ueno et al. 2011
+  model (without `output_positive_weight` or dense projection);
+- whether it scales to the full 1200-word set.
+
+### 19.6 Next steps
+
+1. **Interpret the diagnostic result with Yair.** This is successful diagnostic
+   learning, not a faithful replication. The distinction matters: the original paper
+   used standard BCE with no positive-unit upweighting, and Japanese mora features
+   rather than English one-hot phonemes. Understanding why the paper's setting did
+   not encounter the same low-activation regime — whether due to initialization,
+   learning rate schedule, mora-feature structure, or LENS-specific training dynamics
+   — is the key scientific question.
+
+2. **Scale the best diagnostic setting to 1200 words:**
+
+   ```bash
+   PYTHONPATH=src python scripts/train_repetition_only.py \
+     --data-dir data/raw/nwr_swp --config configs/english_nwr.yaml \
+     --source words --max-items 1200 --epochs 500 --lr 0.005 \
+     --device cpu --seed 0 --zero-error-radius 0.1 --eval-radius 0.1 \
+     --loss-reduction sum --sound-proj-size 20 --output-positive-weight 3.0 \
+     --output-dir outputs/repetition_only_dense20_posw3_lr005_500ep_1200
+   ```
+
+   Label this explicitly as a diagnostic run (not a paper replication). Monitor for
+   training instability (the transient spikes observed at 200 words may worsen with
+   more items) and for generalization patterns — the 200-word result is on the
+   training set, so per-word accuracy at 1200 items will reveal whether the model
+   generalizes or overfits within the diagnostic setting.
+
+3. **Investigate faithful alternatives.** Determine whether a more faithful
+   loss and representation choice — standard BCE (no `output_positive_weight`),
+   without dense projection — could reproduce the same convergence. Candidate
+   directions: phonologically-structured English phoneme features (to replace
+   one-hot, closer in spirit to the paper's mora features), learning rate schedule
+   (e.g. cosine annealing), or longer training at a lower base rate. Any such
+   experiment should be discussed with Yair before running, as it bears directly
+   on whether the implementation constitutes a replication of Ueno et al. 2011.
