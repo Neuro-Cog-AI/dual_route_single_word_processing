@@ -28,11 +28,13 @@ This is **not** a modern seq2seq model or Transformer. The architecture is a han
 | Task-schedule comparison (uniform vs paper) | Complete |
 | Frequency-weighting diagnostics | Complete |
 | LR-schedule diagnostics (constant vs paper-proportional) | Complete |
-| Full integrated training recipe (200 epochs, paper-like settings) | Pending |
+| Repetition-only diagnostic training (200-word subset) | Complete under diagnostic conditions (dense projection + output-positive weighting; not a faithful Ueno replication) |
+| Repetition-only diagnostic scaling (1200-word set) | Attempted; not solved (91/1200 exact match at 500 epochs under same diagnostic setting) |
+| Full-scale faithful training (paper multi-task schedule / paper settings) | Pending |
 | Lesioning and recovery | Pending |
 | Representational similarity analyses | Pending |
 
-See [docs/roadmap.md](docs/roadmap.md) for the full phased plan and [docs/training_notes.md](docs/training_notes.md) for implementation details.
+See [docs/roadmap.md](docs/roadmap.md) for the full phased plan, [docs/training_notes.md](docs/training_notes.md) for implementation details, and [docs/repetition_only_training_note.md](docs/repetition_only_training_note.md) for the repetition-only diagnostic experiment record.
 
 ---
 
@@ -73,6 +75,14 @@ All scripts are run from `dual_route_single_word_processing/` with `PYTHONPATH=s
 | `scripts/compare_task_schedules.py` | Compare uniform (1×REP+1×COMP+1×SPK) vs paper (1×REP+3×COMP+2×SPK) task schedules |
 | `scripts/compare_frequency_weighting.py` | Compare unweighted vs frequency-weighted training (`--frequency-source zipf\|frequency`) |
 | `scripts/compare_lr_schedules.py` | Compare constant vs paper-proportional LR schedule (`--task-schedule paper\|uniform`) |
+
+**Repetition-only training and analysis utilities** (require private CSV data):
+
+| Script | Purpose |
+|---|---|
+| `scripts/train_repetition_only.py` | End-to-end repetition-only training on real English words; supports `--sound-proj-size`, `--output-positive-weight`, and `--dorsal-motor-only` diagnostic flags; saves metrics, predictions, and loss-curve plots per run |
+| `scripts/analyze_repetition_predictions.py` | Analysis utility: reads `predictions_after.json` from a completed run directory and produces a per-word failure-mode breakdown as CSV + Markdown report |
+| `scripts/plot_repetition_metrics.py` | Analysis utility: regenerates `loss_curve.png`, `loss_decomposition_curve.png`, and `loss_curve_range_clipped.png` for any completed run without retraining; accepts `--rolling-window` and `--clip-percentile` |
 
 Example (requires private CSVs):
 
@@ -139,7 +149,8 @@ dual_route_single_word_processing/
 │   ├── replication_spec.md
 │   ├── open_questions.md
 │   ├── architecture_notes.md
-│   └── data_encoding_notes.md
+│   ├── data_encoding_notes.md
+│   └── repetition_only_training_note.md   # Repetition-only diagnostic experiment record (§1–§20)
 ├── scripts/                   # Diagnostic and training scripts
 ├── src/lichtheim2/            # Python package
 │   ├── config.py              # ModelConfig, load_config()

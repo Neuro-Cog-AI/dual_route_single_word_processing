@@ -1278,3 +1278,103 @@ objective and representation changes. The remaining scientific questions are:
    (e.g. cosine annealing), or longer training at a lower base rate. Any such
    experiment should be discussed with Yair before running, as it bears directly
    on whether the implementation constitutes a replication of Ueno et al. 2011.
+
+---
+
+## 20. Diagnostic scaling attempt: 1200-word run and plotting utilities
+
+### 20.1 1200-word run — not solved
+
+Following the 200-word success in §19, the same diagnostic setting was applied to
+1200 words (the full word set available from `wfe.csv`):
+
+```
+Run directory:          outputs/repetition_only_dense20_posw3_lr005_500ep_1200/20260623_104531
+max_items:              1200
+epochs:                 500
+lr:                     0.005
+sound_proj_size:        20    [diagnostic]
+output_positive_weight: 3.0   [diagnostic]
+loss_reduction:         sum
+zero_error_radius:      0.1
+eval_radius:            0.1
+seed:                   0
+```
+
+**Final metrics after 500 epochs:**
+
+| Metric | Value |
+|---|---|
+| Phoneme argmax accuracy | 0.4835 |
+| Whole-word exact match | **91/1200** |
+| Paper-like word accuracy | **0/1200** |
+| Input silence threshold acc | 0.9998 |
+| Output negative threshold acc | 0.8159 |
+| Output positive threshold acc | 0.1182 |
+| Mean positive output | 0.5003 |
+| Mean negative output | 0.0640 |
+| Output-positive BCE | 6.4193 |
+| Output-negative BCE | 13.3695 |
+| Input-phase BCE | 0.0147 |
+| Active neg / pos after dead-zone | 44 / 5 per trial |
+
+**Interpretation:** The best diagnostic setting does not scale directly from 200 to
+1200 words after 500 epochs. Input silence is essentially solved (0.9998) — the same
+pattern as in the 200-word progression. However, both output-positive and
+output-negative BCE remain high, and the active dead-zone counts (44 / 5 per trial)
+confirm that the model has not brought most units within the radius-based criterion.
+This is a qualitatively different failure mode from the 200-word case: at 1200
+words, the model is still in an early-to-mid convergence regime at epoch 500, with
+mean positive output of only 0.5003 (compared to 0.9384 at 200 words).
+
+**What this is not:** This run used the same diagnostic adaptations as the 200-word
+run (dense projection, output-positive weighting). It is not a test of the faithful
+Ueno et al. 2011 setting at 1200 words. The faithful multi-task training at full
+scale remains pending.
+
+### 20.2 Plotting improvements
+
+Two plotting improvements were added alongside the diagnostic runs:
+
+**`scripts/train_repetition_only.py` — updated `save_loss_curve()`:**
+- `loss_curve.png` now shows **average loss only** (no min/max fill). The previous
+  fill_between(min, max) was causing early `max_loss` spikes to compress the y-axis
+  and render the average trajectory invisible on long runs.
+- An optional rolling mean (default window=10) is overlaid as a visual smoothing.
+  The rolling mean is purely cosmetic — it does not affect training.
+- `loss_decomposition_curve.png` is automatically saved alongside `loss_curve.png`
+  if the `avg_eval_output_pos_bce`, `avg_eval_output_neg_bce`, and `avg_eval_input_bce`
+  columns are present in the epoch metrics (requires `--log-loss-decomp`, which is on
+  by default). This makes it easy to see which BCE component remains the bottleneck.
+
+**`scripts/plot_repetition_metrics.py` — new standalone replotting script:**
+Regenerates plots for any completed run without rerunning training. Reads
+`metrics.csv` from a run directory and saves:
+- `loss_curve.png` — avg loss + rolling mean (default window=20)
+- `loss_curve_range_clipped.png` — avg/min/max with y-axis clipped to the
+  `clip_percentile` (default 95th percentile) of `avg_loss`, so early `max_loss`
+  spikes do not compress the scale
+- `loss_decomposition_curve.png` — output-positive, output-negative, input BCE
+
+Each optional plot is silently skipped if its required columns are absent from
+`metrics.csv`. Example:
+
+```bash
+python scripts/plot_repetition_metrics.py \
+  --run-dir outputs/repetition_only_dense20_posw3_lr005_500ep_1200/20260623_104531 \
+  --rolling-window 20
+```
+
+### 20.3 Current status summary
+
+| Experiment | Words | Epochs | lr | Exact match | Paper-like | Status |
+|---|---|---|---|---|---|---|
+| Dense20 + posw3 | 200 | 500 | 0.005 | 200/200 | 200/200 | Solved (diagnostic conditions) |
+| Dense20 + posw3 | 1200 | 500 | 0.005 | 91/1200 | 0/1200 | Not solved |
+| Faithful Ueno replication (multitask) | — | — | — | — | — | Pending |
+
+The 200-word result demonstrates that the current PyTorch implementation can converge
+to strict radius-based repetition under diagnostic conditions. The 1200-word result
+shows that scaling is non-trivial: 6× more items requires substantially more
+convergence capacity (more epochs, lower lr, or a different objective). Faithful
+replication at any scale remains pending.

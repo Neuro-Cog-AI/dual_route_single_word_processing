@@ -252,6 +252,67 @@ Phase 3c is split into sub-steps:
 
 **Success criterion:** All recipes in `RECIPES` return finite losses with matching epoch counts on toy data; an invalid recipe configuration raises a `ValueError` naming the offending recipe and field; always-run tests pass without CSV files; existing tests unaffected. Implementation, tests, and a smoke run against real data have been validated. ✓
 
+#### Phase 3d–3k — Repetition-Only Diagnostic Experiments — **In Progress**
+
+**Goal:** Diagnose why the minimal training loop fails to learn strict repetition on
+real English words and progressively adapt the training objective and phoneme
+representation until convergence is achieved on a controlled 200-word subset. This
+phase documents **diagnostic adaptations that are not faithful Ueno et al. 2011
+replications**. Full detail and all run records are in
+`docs/repetition_only_training_note.md`.
+
+**Adaptations introduced (all opt-in, default off or 1.0):**
+
+| Flag | Description |
+|---|---|
+| `--sound-proj-size N` | Dense 39→N sound projection before iSMG/mSTG; not in the paper |
+| `--dorsal-motor-only` | Exclude `triangularis_to_motor` from motor readout; diagnostic only |
+| `--output-positive-weight W` | Upweight output-phase target-positive motor units; not in the paper |
+
+**Key results:**
+
+- **200-word training subset — solved under diagnostic conditions.**
+  Best run: `dense20 + output_positive_weight=3.0 + lr=0.005 + 500 epochs`.
+  Final: 200/200 exact match, 200/200 paper-like word accuracy (`eval_radius=0.1`),
+  active dead-zone units = 0/0 per trial. Run directory:
+  `outputs/repetition_only_dense20_posw3_lr005_500ep_200/20260622_213921`.
+  This result demonstrates convergence on the 200-word training subset under the
+  strict radius-based criterion. **It is not a faithful Ueno replication** — the
+  original paper uses standard BCE and no dense projection.
+
+- **1200-word diagnostic scaling — attempted but not solved.**
+  Same diagnostic setting, `max_items=1200`, 500 epochs:
+  91/1200 exact match, 0/1200 paper-like word accuracy. Output-negative BCE remains
+  high (13.37); mean positive output is only 0.50. The model is still in an
+  early-to-mid convergence regime at epoch 500. Run directory:
+  `outputs/repetition_only_dense20_posw3_lr005_500ep_1200/20260623_104531`.
+  This is the same diagnostic setting at larger scale, not a test of the paper's
+  faithful multi-task training recipe.
+
+- **Faithful Ueno replication remains pending.** The multi-task training schedule
+  (repetition + comprehension + speaking, paper LR schedule, mora-based phonology)
+  has not yet been run to convergence.
+
+**New scripts added:**
+
+| Script | Purpose |
+|---|---|
+| `scripts/train_repetition_only.py` | End-to-end repetition-only training on real English words with diagnostic flags |
+| `scripts/analyze_repetition_predictions.py` | Post-training prediction error analysis (CSV + Markdown report; analysis utility, not training) |
+| `scripts/plot_repetition_metrics.py` | Regenerate loss-curve plots for completed runs without retraining (analysis utility) |
+
+**Next steps:**
+
+1. **Analyze the 1200-word scaling failure** — inspect prediction error breakdown,
+   failure mode distribution by word length, and BCE component trajectories.
+2. **Compare with padded batching / EOS setup** — determine whether batch training
+   addresses the scaling bottleneck before committing to further diagnostic runs.
+3. **Decide on padded batching and EOS** — evaluate whether to implement batch
+   training as a prerequisite for the next scaling attempt.
+4. **Discuss with Yair** — clarify the boundary between diagnostic adaptations and
+   faithful replication; determine what scientific conclusions can be drawn from the
+   current runs.
+
 ---
 
 ## Phase 4 — Lesioning and Recovery
