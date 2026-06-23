@@ -680,8 +680,21 @@ def save_predictions(run_dir: Path, predictions: list[dict], filename: str) -> N
         json.dump(predictions, f, indent=2)
 
 
-def save_loss_curve(run_dir: Path, epoch_metrics: list[dict]) -> None:
-    """Save a loss-curve PNG if matplotlib is available (silent skip otherwise)."""
+def _rolling_mean(values: list[float], window: int) -> list[float]:
+    """Left-aligned trailing rolling mean; no external deps."""
+    out = []
+    for i in range(len(values)):
+        start = max(0, i - window + 1)
+        out.append(sum(values[start : i + 1]) / (i - start + 1))
+    return out
+
+
+def save_loss_curve(run_dir: Path, epoch_metrics: list[dict], rolling_window: int = 10) -> None:
+    """Save loss curve PNG(s) if matplotlib is available (silent skip otherwise).
+
+    Always saves loss_curve.png (avg loss only).
+    Also saves loss_decomposition_curve.png if decomposition columns are present.
+    """
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -690,23 +703,45 @@ def save_loss_curve(run_dir: Path, epoch_metrics: list[dict]) -> None:
         print("  (matplotlib not available — skipping loss_curve.png)")
         return
 
-    epochs    = [m["epoch"]    for m in epoch_metrics]
+    saved: list[str] = []
+    epochs = [m["epoch"] for m in epoch_metrics]
     avg_losses = [m["avg_loss"] for m in epoch_metrics]
-    min_losses = [m["min_loss"] for m in epoch_metrics]
-    max_losses = [m["max_loss"] for m in epoch_metrics]
 
+    # Main plot: avg loss only (no min/max fill)
     fig, ax = plt.subplots(figsize=(8, 4))
-    ax.fill_between(epochs, min_losses, max_losses, alpha=0.2, color="steelblue", label="min/max range")
-    ax.plot(epochs, avg_losses, color="steelblue", linewidth=2, label="avg loss")
+    ax.plot(epochs, avg_losses, linewidth=1.5, label="avg loss")
+    if len(epochs) >= rolling_window:
+        smooth = _rolling_mean(avg_losses, rolling_window)
+        ax.plot(epochs, smooth, linewidth=2, label=f"rolling mean (w={rolling_window})")
     ax.set_xlabel("Epoch")
-    ax.set_ylabel("BCE loss")
-    ax.set_title("Repetition-only training — per-epoch loss")
+    ax.set_ylabel("BCE loss (sum)")
+    ax.set_title("Repetition-only training — average loss per epoch")
     ax.legend()
     fig.tight_layout()
-    path = run_dir / "loss_curve.png"
-    fig.savefig(path, dpi=150)
+    fig.savefig(run_dir / "loss_curve.png", dpi=150)
     plt.close(fig)
-    print(f"  Saved: loss_curve.png")
+    saved.append("loss_curve.png")
+
+    # Decomposition plot (skipped silently if columns absent)
+    decomp_keys = ("avg_eval_output_pos_bce", "avg_eval_output_neg_bce", "avg_eval_input_bce")
+    if epoch_metrics and all(k in epoch_metrics[0] for k in decomp_keys):
+        fig, ax = plt.subplots(figsize=(8, 4))
+        for key, label in [
+            ("avg_eval_output_pos_bce", "output-positive BCE"),
+            ("avg_eval_output_neg_bce", "output-negative BCE"),
+            ("avg_eval_input_bce",      "input BCE"),
+        ]:
+            ax.plot(epochs, [m[key] for m in epoch_metrics], linewidth=1.5, label=label)
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("BCE loss (sum, unweighted eval)")
+        ax.set_title("Loss decomposition — eval pass per epoch")
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(run_dir / "loss_decomposition_curve.png", dpi=150)
+        plt.close(fig)
+        saved.append("loss_decomposition_curve.png")
+
+    print(f"  Saved: {', '.join(saved)}")
 
 
 # ---------------------------------------------------------------------------
