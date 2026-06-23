@@ -42,3 +42,4 @@ wandb/
 dist/
 build/
 *.egg-info/
+reports/
