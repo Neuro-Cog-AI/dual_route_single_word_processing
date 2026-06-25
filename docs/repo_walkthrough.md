@@ -55,6 +55,12 @@ Based on the current code (cross-checked against `docs/roadmap.md` and
   3c-11) that exercise this pipeline on real CSV data and compare specific
   training-loop choices (loss reduction, task schedule, frequency weighting,
   LR schedule, and integrated "recipes" combining all four).
+- **Level 1B safe cleanup** (Phase 3e): pure metric computation, repetition
+  evaluation, and diagnostic loss decomposition extracted to dedicated library
+  modules (`src/lichtheim2/metrics.py`, `src/lichtheim2/repetition_evaluation.py`,
+  `src/lichtheim2/loss_decomposition.py`). The primary repetition-only training
+  script (`scripts/train_repetition_only.py`) now serves as a clean orchestrator.
+  **Test suite: 429 passed. Smoke run passed.**
 
 **Documentation-status note `[Open]`:** `docs/roadmap.md` still marks Phase
 2b ("Faithful Weight Initialisation"), Phase 2c ("Variable-Length Trials"),
@@ -76,10 +82,6 @@ flagging rather than silently asserting "done."
 - **A full, paper-scale integrated training run** (e.g. 200 epochs, full
   vocabulary, the paper's 1×REP/3×COMP/2×SPK schedule as the *actual* training
   loop, not just a diagnostic) — README lists this as "Pending."
-- **An accuracy / evaluation metric** (proportion of words correct per epoch
-  per task, as in paper Figure 2) — not implemented anywhere in
-  `src/lichtheim2/` or `scripts/` as far as this walkthrough's source review
-  found. `[Open]`
 - **Faithful prototype-based semantic vectors** (50 prototypes × 40 exemplars,
   20 on-bits, ≥4-bit Hamming distance, per the supplement) — currently
   `assign_artificial_semantics()` produces independent random binary vectors
@@ -90,9 +92,7 @@ flagging rather than silently asserting "done."
   implemented.
 - A **zero-error radius of 0.1** as the *default* everywhere — the paper value
   is 0.1 `[Paper]`, but `compute_trial_loss()` / `train_step()` default to
-  `0.0`, and most diagnostic scripts also default to `0.0` (one real-data
-  script defaults to `0.1`). This is a per-call argument, not a global
-  constant.
+  `0.0`, and most diagnostic scripts also default to `0.0`.
 
 ### Diagnostic vs. model code
 
@@ -102,9 +102,11 @@ It's worth being explicit about this distinction when presenting:
 |---|---|---|
 | **Model code** | `src/lichtheim2/{layers,model,tasks}.py` | The actual Lichtheim 2 architecture and tick dynamics — this *is* the replication. |
 | **Data / encoding code** | `src/lichtheim2/{config,encoding,data,semantics}.py` | Loading config, phonemes, word items, and assigning semantic targets. |
-| **Training-mechanics code** | `src/lichtheim2/{trials,losses,trainer}.py` | Turning a `WordItem`/`PseudowordItem` into a supervised trial, computing loss, and taking one optimizer step. This is shared infrastructure, used by both diagnostics and any future full training run. |
-| **Diagnostic / comparison scripts** | `scripts/compare_*.py`, `scripts/diagnose_*.py`, `scripts/audit_*.py` | Not part of the model. Each one varies *one or a few* training-loop choices (loss reduction, task schedule, frequency weighting, LR schedule, or combinations) on a small subset (≈10 words) and prints a comparison table. They exist to build intuition and de-risk decisions *before* committing to a full training recipe. |
-| **Pipeline-validation scripts** | `scripts/train_repetition_real_data.py`, `scripts/train_multitask_real_data.py`, `scripts/smoke_train_repetition.py` | Earlier "does this even run end-to-end on real/synthetic data" scripts. Not the final training run either. |
+| **Training-mechanics code** | `src/lichtheim2/{trials,losses,trainer}.py` | Turning a `WordItem`/`PseudowordItem` into a supervised trial, computing loss, and taking one optimizer step. Shared infrastructure for both diagnostics and any future full training run. |
+| **Evaluation / metrics code** | `src/lichtheim2/{metrics,repetition_evaluation,loss_decomposition}.py` | Post-training and post-epoch evaluation: argmax accuracy, threshold metrics, word-level accuracy, and diagnostic BCE decomposition. Extracted in Level 1B. No model changes. |
+| **Diagnostic / comparison scripts** | `scripts/compare_*.py`, `scripts/diagnose_*.py`, `scripts/audit_*.py` | Not part of the model. Each varies *one or a few* training-loop choices on a small subset (≈10 words). |
+| **Pipeline-validation scripts** | `scripts/train_repetition_real_data.py`, `scripts/train_multitask_real_data.py`, `scripts/smoke_train_repetition.py` | Earlier "does this even run end-to-end" scripts. |
+| **Repetition-only training script** | `scripts/train_repetition_only.py` | Primary repetition-only training run on English NWR data (Phase 3e). Orchestrates data loading, trial construction, training, evaluation, and output saving. |
 | **Documentation** | `README.md`, `CLAUDE.md`, `docs/*.md` | Specification, design rationale, roadmap, open questions. |
 
 ---
@@ -115,10 +117,11 @@ It's worth being explicit about this distinction when presenting:
 
 #### `config.py` — *model/config code*
 - **Role:** Defines the model's size parameters and loads them from YAML.
-- **Key items:** `ModelConfig` dataclass (10 fields: `sound_input_size`,
+- **Key items:** `ModelConfig` dataclass (12 fields: `sound_input_size`,
   `motor_output_size`, `iSMG_hidden_size`, `mSTG_hidden_size`,
   `aSTG_hidden_size`, `triangularis_hidden_size`, `vATL_size`,
-  `repetition_ticks=6`, `comprehension_ticks=3`, `speaking_ticks=3`);
+  `repetition_ticks=6`, `comprehension_ticks=3`, `speaking_ticks=3`,
+  `sound_proj_size=None`, `dorsal_motor_only=False`);
   `load_config(path)` reads the `model:`/`tasks:` YAML sections.
 - **Connections:** Every other module that needs layer sizes takes a
   `ModelConfig`. The three tick-count fields are now **historical/reference
@@ -143,8 +146,8 @@ It's worth being explicit about this distinction when presenting:
 #### `model.py` — *model code*
 - **Role:** The architecture itself — `Lichtheim2Model(nn.Module)`.
 - **Key items:**
-  - `__init__(cfg)` — instantiates 10 `nn.Linear` layers (one per named
-    connection) and calls `_init_weights()`.
+  - `__init__(cfg)` — instantiates 10–11 `nn.Linear` layers (one per named
+    connection, plus an optional `sound_proj`) and calls `_init_weights()`.
   - `_init_weights()` — applies the paper's initialisation scheme (see
     Section 4 below for the full table).
   - `forward_tick(state, sound=None, clamp_vATL_in=None) -> (new_state, vATL_input_used)`
@@ -156,6 +159,9 @@ It's worth being explicit about this distinction when presenting:
 - **Connections:** Calls into `tasks.py` (`build_trial_inputs`) and
   `layers.py` (`init_state`). Called by `trainer.train_step()` and every
   diagnostic script.
+- **Diagnostic flags** (not in paper): `dorsal_motor_only` excludes
+  `triangularis_to_motor` from the motor sum. `sound_proj_size` enables a
+  dense projection from the raw phoneme vector before both pathways.
 
 #### `tasks.py` — *model code*
 - **Role:** Defines the three tasks and converts a phoneme/semantic pattern
@@ -187,8 +193,7 @@ It's worth being explicit about this distinction when presenting:
     ticks; `sem_input = sem_tensor` (clamped every tick); motor target =
     `phon_tensor`; mask all `True`; no semantic target.
 - **Connections:** Consumed by `trainer.train_step()` and every script that
-  builds trials (`train_multitask_real_data.py`,
-  `diagnose_small_subset_training.py`, the `compare_*` scripts).
+  builds trials.
 
 #### `losses.py` — *training-mechanics code*
 - **Role:** Computes the masked BCE loss, with an optional per-unit
@@ -197,28 +202,87 @@ It's worth being explicit about this distinction when presenting:
   - `LossBreakdown` dataclass — `task`, `n_ticks`, `total_loss`,
     `motor_loss`, `semantic_loss`, `n_active_motor`, `n_active_semantic`,
     `motor_loss_per_unit`, `semantic_loss_per_unit`.
-  - `compute_trial_loss_breakdown(tick_results, trial, zero_error_radius=0.0)`
+  - `compute_trial_loss_breakdown(tick_results, trial, zero_error_radius=0.0, output_positive_weight=1.0)`
     — stacks `motor`/`vATL_out` across ticks, computes
     `F.binary_cross_entropy(..., reduction="none")`, masks by
     `motor_loss_mask`/`semantic_loss_mask` (and optionally by a zero-error
-    "dead zone"), and sums.
-  - `compute_trial_loss(tick_results, trial, zero_error_radius=0.0, loss_reduction="sum")`
+    "dead zone"), and sums. Optionally upweights the output-phase positive unit
+    via `output_positive_weight` (diagnostic; default 1.0 = no effect).
+  - `compute_trial_loss(tick_results, trial, zero_error_radius=0.0, loss_reduction="sum", output_positive_weight=1.0)`
     — returns `breakdown.total_loss` (`"sum"`, default, paper-faithful) or
     `breakdown.total_loss / n_active` (`"mean_active"`, diagnostic only).
-- **Connections:** Called by `trainer.train_step()` and `audit_loss_scaling.py`.
+- **Connections:** Called by `trainer.train_step()`. Also called directly by
+  `loss_decomposition.py::compute_trial_loss_decomposition` for decomp
+  consistency tests.
 
 #### `trainer.py` — *training-mechanics code*
 - **Role:** The actual online training step.
 - **Key items:**
   - `move_trial_to_device(trial, device)` — `dataclasses.replace` with all
     tensor fields `.to(device)`.
-  - `train_step(model, trial, optimizer, cfg, zero_error_radius=0.0, device="cpu", loss_reduction="sum") -> float`
+  - `train_step(model, trial, optimizer, cfg, zero_error_radius=0.0, device="cpu", loss_reduction="sum", output_positive_weight=1.0) -> float`
     — `model.train()` → `optimizer.zero_grad()` → move trial to device →
     `model.run_trial(...)` → `compute_trial_loss(...)` → multiply by
     `trial.loss_weight` if `!= 1.0` → `loss.backward()` → `optimizer.step()`
     → return `loss.item()`.
 - **Connections:** This is the single function every training/diagnostic
-  script calls per item.
+  script calls per item. Also imported by `loss_decomposition.py` and
+  `repetition_evaluation.py` for `move_trial_to_device`.
+
+#### `metrics.py` — *evaluation / metrics code* *(Level 1B)*
+- **Role:** Pure, stateless metric computation helpers. No model calls, no
+  file I/O. All functions work on raw tensors.
+- **Key items:**
+  - `compute_repetition_metric_breakdown(motor_input, motor_output, motor_targets_out) -> dict`
+    — 6-key split breakdown separating input-phase silence from output-phase
+    positive/negative unit accuracy (see Section 8 for key descriptions).
+  - `compute_repetition_word_accuracy(motor_input, motor_output, motor_targets_out, radius) -> dict`
+    — 3 boolean keys: `output_all_units_within_radius`,
+    `input_all_silent_within_radius`, `trial_all_supervised_units_within_radius`.
+  - `prediction_summary(preds: list[dict]) -> dict` — 15-key aggregate over
+    a list of per-trial prediction dicts (NaN floats when preds is empty).
+  - `rolling_mean(values, window) -> list[float]` — trailing rolling average;
+    used by the plot script.
+- **Connections:** Imported by `repetition_evaluation.py`. Imported by
+  `train_repetition_only.py` under original private-name aliases (behavior-
+  preserving). Imported by `plot_repetition_metrics.py` for `rolling_mean`.
+  No model imports.
+
+#### `repetition_evaluation.py` — *evaluation / metrics code* *(Level 1B)*
+- **Role:** Runs the model in eval mode (`model.eval()` + `torch.no_grad()`)
+  and computes per-trial prediction metrics for repetition.
+- **Key items:**
+  - `evaluate_one_trial(model, trial, cfg, inventory_symbols, device, eval_radius=0.1) -> dict`
+    — runs `model.run_trial()`, stacks input-phase and output-phase motor
+    outputs, computes argmax accuracy, threshold accuracy, exact match,
+    metric breakdown, and word accuracy; returns a flat 18-key dict.
+  - `evaluate_predictions(model, trials, cfg, inventory_symbols, device, eval_radius=0.1) -> list[dict]`
+    — maps `evaluate_one_trial` over all trials.
+- **Note:** `eval_radius` can differ from the training `zero_error_radius`.
+  The train script evaluates with `eval_radius=0.1` (paper value) even when
+  training with a different radius.
+- **Connections:** Called by `train_repetition_only.py` before and after
+  training. Imports `metrics.py` and `trainer.move_trial_to_device`.
+
+#### `loss_decomposition.py` — *evaluation / metrics code* *(Level 1B)*
+- **Role:** Diagnostic post-epoch eval pass that decomposes BCE by phase and
+  unit polarity. Intentionally separate from `losses.py` to avoid confusion
+  with the training objective.
+- **Key items:**
+  - `compute_trial_loss_decomposition(tick_results, trial, zero_error_radius) -> dict`
+    — 8-key dict: `input_bce`, `output_bce`, `motor_bce`, `output_pos_bce`,
+    `output_neg_bce`, `n_active_input`, `n_active_output_pos`,
+    `n_active_output_neg`. Called in eval mode under `torch.no_grad()`.
+  - `compute_epoch_loss_decomp(model, trials, cfg, zero_error_radius, device) -> dict`
+    — 11-key dict with `avg_eval_` prefix. Runs a second forward pass over all
+    trials after each training epoch. Sets `model.eval()` internally; caller
+    must restore `model.train()` afterward (the train script does this).
+- **Critical distinction:** Keys are prefixed `avg_eval_` because values
+  reflect model weights at *epoch-end*, not at the time of each online update.
+  These are diagnostic, not the training loss.
+- **Connections:** Called by `run_training()` in `train_repetition_only.py`
+  when `log_loss_decomp=True`. Imported by the same script under original
+  private-name aliases.
 
 #### `encoding.py` — *data code*
 - **Role:** English phoneme inventory and one-hot encoder.
@@ -249,7 +313,7 @@ It's worth being explicit about this distinction when presenting:
   - `load_pseudoword_items(ssp_path, inventory) -> list[PseudowordItem]` —
     analogous, required fields `No_Stress`, `Length`.
 - **Connections:** `row_index` is the join key used by `semantics.py` and by
-  the frequency-weighting diagnostics (`compare_frequency_weighting.py`).
+  the frequency-weighting diagnostics.
 
 #### `semantics.py` — *data code*
 - **Role:** Assigns a semantic target vector to each real word.
@@ -261,6 +325,7 @@ It's worth being explicit about this distinction when presenting:
   is not yet implemented (D15 `Open`/`Provisional`).
 - **Connections:** Output dict is passed to `make_comprehension_trial` (as
   the semantic *target*) and `make_speaking_trial` (as the semantic *input*).
+  Not used in the repetition-only training script.
 
 ### Configs (`configs/`)
 
@@ -273,12 +338,11 @@ It's worth being explicit about this distinction when presenting:
 ### Documentation (`docs/`, `README.md`, `CLAUDE.md`)
 
 - `README.md` — top-level overview, status table, diagnostic-script table,
-  appendix with the equation-level architecture summary (Section 4 below
-  draws on this).
+  appendix with the equation-level architecture summary.
 - `CLAUDE.md` — instructions for Claude Code; also a compact "Current
   Development Status" summary.
 - `docs/roadmap.md` — the canonical phase-by-phase plan with deliverables and
-  success criteria (Phases 0 through 3c-11 detailed; 4–6 sketched).
+  success criteria.
 - `docs/replication_spec.md` — precise layer/pathway/tick/loss specification
   with citation tags; the most "ground truth" doc for architecture questions.
 - `docs/architecture_notes.md` — *why* the architecture is hand-rolled
@@ -288,6 +352,17 @@ It's worth being explicit about this distinction when presenting:
 - `docs/training_notes.md` — training paradigm, schedules, and one
   "Phase 3c-N Implementation" section per training-loop diagnostic.
 - `docs/open_questions.md` — D1–D18, the canonical open-questions ledger.
+- `docs/repetition_training_loop.md` — full pipeline from CSV to gradient
+  update, including BPTT scope and the 38:1 imbalance problem.
+- `docs/forward_tick_equations.md` — exact `forward_tick()` equations with
+  tensor shapes, learned vs. activation distinction, and diagnostic flags.
+- `docs/loss_masks_zero_radius.md` — BCE formula, mask broadcasting, dead
+  zone, loss decomposition, and `output_positive_weight` behavior.
+- `docs/diagnostic_vs_faithful.md` — classification of every implementation
+  component as Faithful / Inferred / English/NWR adaptation / Diagnostic-only.
+- `docs/modernization_options.md` — structured roadmap of optional changes
+  from zero-risk cleanup (Level 1) to alternative EOS/CrossEntropy model
+  (Level 5), with scientific risk assessment for each.
 
 ### Diagnostic / training scripts (`scripts/`)
 
@@ -299,10 +374,12 @@ It's worth being explicit about this distinction when presenting:
 | `diagnose_small_subset_training.py` | 3c-4 | Baseline stability diagnostic; defines `DiagnosticResult`, `sample_items()`, `run_diagnostic_epochs()` reused by all later comparison scripts. |
 | `audit_loss_scaling.py` | 3c-5 | No-training audit of `LossBreakdown` (motor vs. semantic, per-unit) on real data. |
 | `compare_loss_reductions.py` | 3c-7 | `sum` vs. `mean_active` loss reduction, identical conditions. |
-| `compare_task_schedules.py` | 3c-8 | `uniform` (1/1/1) vs. `paper` (1×REP/3×COMP/2×SPK) task schedule. Defines `SCHEDULES`. |
+| `compare_task_schedules.py` | 3c-8 | `uniform` (1/1/1) vs. `paper` (1×REP/3×COMP/2×SPK) task schedule. |
 | `compare_frequency_weighting.py` | 3c-9 | Unweighted vs. frequency-weighted (`zipf`/`frequency`) training. |
-| `compare_lr_schedules.py` | 3c-10 | Constant vs. paper-proportional LR schedule. Defines `lr_for_epoch()`. |
-| `compare_training_recipes.py` | 3c-11 | Combines all four dimensions above into named "recipes" (`baseline_constant`, `frequency_constant`, `frequency_paper_lr`, `zipf_constant`) and compares them. |
+| `compare_lr_schedules.py` | 3c-10 | Constant vs. paper-proportional LR schedule. |
+| `compare_training_recipes.py` | 3c-11 | Combines all four dimensions above into named "recipes" and compares them. |
+| `train_repetition_only.py` | 3e | **Primary repetition-only script.** Orchestrates: load config → load English NWR data → build repetition trials → pre-training eval → online SGD training with per-epoch loss decomp → post-training eval → save outputs (metrics.csv, predictions_before/after.json, loss_curve.png). Uses `metrics.py`, `repetition_evaluation.py`, `loss_decomposition.py`. |
+| `plot_repetition_metrics.py` | 3e | Standalone plotting utility: reads a completed run's `metrics.csv` and regenerates loss-curve PNGs. No model imports. |
 
 ---
 
@@ -388,6 +465,50 @@ under the `mixed-multitask` mode used by the diagnostic scripts:
 This sequence repeats once per `(word/pseudoword, task)` trial, in whatever
 order/multiplicity the active task schedule dictates, for every epoch.
 
+### Repetition-only training call graph
+
+For the primary training script (`scripts/train_repetition_only.py`), the
+call graph is more specific. See also `docs/repetition_training_loop.md` for
+the detailed tick-by-tick breakdown.
+
+```
+main()
+├── parse_args() / validate_args()
+├── load_config(english_nwr.yaml)          → ModelConfig
+├── Lichtheim2Model(cfg).to(device)        → model (~350k params)
+├── load_phoneme_inventory(phonemes.csv)   → PhonemeInventory (39 symbols)
+├── load_word_items(wfe.csv, inventory)    → list[WordItem]
+├── build_repetition_trials(items, 39)     → list[SupervisedTrial]
+│   └── make_repetition_trial per item
+│       motor_targets = [zeros(T,39); phon_tensor]  shape (2T, 39)
+│       motor_loss_mask = ones(2T, bool)  — ALL ticks supervised
+│
+├── evaluate_predictions(model, trials, ...) [pre-training]
+│   └── evaluate_one_trial per trial
+│       ├── model.eval() + torch.no_grad()
+│       ├── model.run_trial() → list[TickResult] (2T entries)
+│       └── compute argmax acc, threshold acc, breakdown, word acc
+│
+├── SGD optimizer
+└── run_training(model, trials, optimizer, cfg, epochs, ...)
+    └── for each epoch:
+        ├── model.train() + shuffle
+        └── for each trial:
+            └── train_step(model, trial, optimizer, cfg, ...)
+                ├── model.train() + zero_grad()
+                ├── model.run_trial() → list[TickResult]
+                │   └── for t in 0..2T-1: forward_tick(state, sound_t, None)
+                ├── compute_trial_loss(tick_results, trial, radius)
+                │   ├── stack motor outputs → (2T, 39)
+                │   ├── BCE(outputs, targets, reduction="none") → (2T, 39)
+                │   ├── apply mask + dead zone → alive (2T, 39)
+                │   └── (raw_motor * alive.float()).sum() → scalar
+                ├── loss.backward()   ← full BPTT through all 2T ticks
+                └── optimizer.step()
+        └── [if log_loss_decomp]: compute_epoch_loss_decomp()
+            — eval-mode pass; input/output-pos/output-neg BCE breakdown
+```
+
 ---
 
 ## 4. Architecture / forward pass
@@ -419,12 +540,16 @@ speaking):
 vATL_input_used = clamp_vATL_in   if provided
                 = state.vATL_context   otherwise
 
-iSMG_net   = sound_to_iSMG(sound)
+[Optional sound projection — not in paper; bias=False so zeros → zeros]
+sound_in = sound_proj(sound)  if sound_proj_size is set
+         = sound               otherwise
+
+iSMG_net   = sound_to_iSMG(sound_in)
            + iSMG_elman(state.iSMG_context)
            + motor_copy_to_iSMG(state.motor_context)
 new_iSMG   = sigmoid(iSMG_net)
 
-new_mSTG   = sigmoid(sound_to_mSTG(sound))
+new_mSTG   = sigmoid(sound_to_mSTG(sound_in))
 
 aSTG_net   = mSTG_to_aSTG(new_mSTG)
            + vATL_in_to_aSTG(vATL_input_used)
@@ -433,8 +558,11 @@ new_aSTG   = sigmoid(aSTG_net)
 new_vATL_out      = sigmoid(aSTG_to_vATL(new_aSTG))
 new_triangularis  = sigmoid(aSTG_to_triangularis(new_aSTG))
 
+# Standard (paper-faithful):
 motor_net  = iSMG_to_motor(new_iSMG)
            + triangularis_to_motor(new_triangularis)
+# Diagnostic (dorsal_motor_only=True): motor_net = iSMG_to_motor(new_iSMG)
+
 new_motor  = sigmoid(motor_net)
 ```
 
@@ -447,13 +575,24 @@ vATL_context(t+1)  = new_vATL_out # vATL_out → vATL_in copy-back
 ```
 
 `forward_tick` returns `(new_state, vATL_input_used)` — the latter is recorded
-in `TickResult` purely for inspection (it tells you whether vATL's input came
-from the previous tick's own output, or from an external clamp).
+in `TickResult` purely for inspection.
 
 Every `*_net` is a sum of `nn.Linear` outputs followed by `sigmoid`, so **all
 activations live in `[0, 1]`** `[Paper]`. Clamped inputs (`sound`,
 `clamp_vATL_in`) are fed in as raw tensors — they are *not* passed through any
 activation function `[Inferred]`.
+
+For the full equation-level detail with shapes and learned-vs-activation
+distinctions, see `docs/forward_tick_equations.md`.
+
+### Important note on `motor_copy_to_iSMG`
+
+The name says "copy" — following the paper's vocabulary of "copy-back
+connections" — but the implementation is a learned `nn.Linear(motor_size,
+iSMG_size, bias=False)` with weights initialized to `uniform(−0.5, 0.5)`. It
+transforms the motor output through a learnable projection matrix before adding
+it to the iSMG net input. The term "copy connection" in the paper means
+"feedback pathway from one region to another," not an identity map.
 
 ### Comparison with vanilla RNN / LSTM
 
@@ -469,20 +608,18 @@ activation function `[Inferred]`.
   above carried from the *previous* tick. Recurrence is **local** — only
   `iSMG` has true Elman self-recurrence; the other "recurrent" connections
   (`motor_copy_to_iSMG`, `vATL_in_to_aSTG`) are one-tick-delay copy-backs
-  realizing specific bidirectional arrows from Supplementary Figure S1, not a
-  generic hidden state.
+  realizing specific bidirectional arrows from Supplementary Figure S1.
 
 The key practical consequence: **recurrence here is manually implemented via
 explicit `ModelState` fields that the caller threads from tick to tick** —
 there is no internal hidden state managed by a PyTorch recurrent module, and
-every intermediate activation at every tick is inspectable (used for the
-per-component loss breakdown in Section 6, and intended for future
-lesioning / RSA work).
+every intermediate activation at every tick is inspectable.
 
-### Connection table (10 `nn.Linear` modules) and initialisation
+### Connection table (10–11 `nn.Linear` modules) and initialisation
 
 | Connection | Shape | Bias | Init range | Source |
 |---|---|---|---|---|
+| `sound_proj` (optional) | `(sound, proj)` | none | `[-1, 1]` | `[Adapted]` not in paper; `bias=False` so zero sound → zero projection |
 | `sound_to_iSMG` | `(sound, iSMG)` | yes, `=-1.0` | `[-1, 1]` | `[Paper]` weights / `[Inferred]` bias |
 | `iSMG_elman` | `(iSMG, iSMG)` | none | `[-0.5, 0.5]` | `[Paper]` |
 | `motor_copy_to_iSMG` | `(motor, iSMG)` | none | `[-0.5, 0.5]` | `[Inferred]` (treated as "recurrent") |
@@ -508,52 +645,32 @@ All three tasks share the same `Lichtheim2Model`; only the per-tick inputs
   `0..T-1`; zero sound for ticks `T..2T-1`. `clamp_vATL_in = None` throughout
   (vATL gets its input from `vATL_context`, i.e. its own previous output).
 - **Targets:** `motor_targets = [zeros(T, motor_size); phon_tensor]` —
-  i.e. silence during the input phase, then reproduce the phoneme sequence
+  silence during the input phase, then reproduce the phoneme sequence
   during the output phase.
 - **Ticks:** `2T` (`T` input + `T` output) `[Paper, generalised to variable T]`.
-  The original paper's fixed-length setup is `2×3=6` ticks.
 - **Active loss:** `motor_loss_mask` is **all `True`** — motor loss is
   computed at *every* tick, including the silent input phase (the model is
   trained to actually output zeros/silence there) `[Paper: motor "required to
   be silent" during input phase]`. No semantic loss.
-- **Paper vs. inferred:** The 2T structure and "motor silent during input"
-  are `[Paper]`; generalising from the fixed 3-mora case to arbitrary `T` is
-  `[Inferred]`/`[Paper, generalised]`.
 
 ### 5.2 Comprehension
 
 - **Inputs:** Sound input clamped to the phoneme sequence for all `T` ticks.
-  `clamp_vATL_in = None` (vATL input still comes from `vATL_context`, which at
-  tick 0 is the initial 0.5 state).
+  `clamp_vATL_in = None` (vATL input still comes from `vATL_context`).
 - **Targets:** `semantic_targets` = the word's semantic vector, **repeated at
-  every tick** (`sem_tensor.unsqueeze(0).expand(T, -1)`); `motor_targets =
-  zeros(T, motor_size)`.
+  every tick**; `motor_targets = zeros(T, motor_size)`.
 - **Ticks:** `T` `[Paper]`.
 - **Active loss:** Both `semantic_loss_mask` and `motor_loss_mask` are **all
-  `True`** — semantic loss (vATL output vs. target) and motor loss (motor
-  required silent) are computed at every tick.
-- **Paper vs. inferred:** `[Paper]` confirms comprehension is evaluated "at
-  tick 3" (i.e., the *last* tick of a 3-tick trial) — `docs/replication_spec.md`
-  and `docs/open_questions.md` both note the evaluation tick(s) for variable
-  `T` and for *every* tick (vs. only the last) is not fully pinned down. The
-  current code applies the semantic loss at **every** tick, which is a
-  generalisation/simplification `[Inferred]`, not a literal reading of "tick
-  3 only."
+  `True`** — semantic loss and motor silence loss at every tick.
 
 ### 5.3 Speaking / naming
 
 - **Inputs:** Zero sound for all `T` ticks; `clamp_vATL_in = sem_tensor`,
-  hard-clamped at *every* tick (so `vATL_input_used` is always the external
-  semantic pattern, never `vATL_context`).
-- **Targets:** `motor_targets = phon_tensor` (the word's own phoneme
-  sequence); no semantic targets.
+  hard-clamped at *every* tick.
+- **Targets:** `motor_targets = phon_tensor`; no semantic targets.
 - **Ticks:** `T` `[Paper]`. `phon_tensor` is required even though sound input
   is zero, because its length determines `T`.
-- **Active loss:** `motor_loss_mask` is **all `True`** — motor loss at every
-  tick.
-- **Paper vs. inferred:** Clamping the semantic pattern onto vATL input and
-  evaluating motor output is `[Paper]`; the *exact* tick(s) at which motor
-  output is scored is `[Open]` (D5) — the current code scores every tick.
+- **Active loss:** `motor_loss_mask` is **all `True`**.
 
 ### Summary table
 
@@ -569,8 +686,7 @@ All three tasks share the same `Lichtheim2Model`; only the per-tick inputs
 
 These five diagnostics each isolate **one (or, in 3c-11, several combined)
 training-loop choice(s)** and run small (~10-word) comparisons under
-identical seeds/data/epochs, so the choices can be made with some empirical
-grounding before a full run. All use
+identical seeds/data/epochs. All use
 `run_diagnostic_epochs()`/`DiagnosticResult` from
 `diagnose_small_subset_training.py` (3c-4) as their shared engine, and all
 follow the same **fairness pattern**: load/sample items once, then for each
@@ -585,116 +701,190 @@ condition do `torch.manual_seed(seed)` → fresh `Lichtheim2Model` → fresh
 
 ### Phase 3c-7 — Loss reduction comparison (`compare_loss_reductions.py`)
 
-- **Question:** Does training look different/better under `"sum"` (paper
-  default — total summed BCE) vs. `"mean_active"` (normalised by the number
-  of active output elements, intended to control for task imbalance — e.g.
-  comprehension has more active elements than speaking/repetition)?
-- **What it does:** Runs both reductions on the same trials/seed/epochs and
-  reports initial/final/best average loss and best epoch for each.
-- **How to interpret:** Don't compare `sum` vs. `mean_active` absolute values
-  (different scales) — compare `% decrease` for each. `verbose=False` was
-  added to `run_diagnostic_epochs()` here so only the summary table prints.
-- **Outcome recorded in docs:** The implementation and always-run tests pass
-  (success criterion has `✓`); `docs/training_notes.md` does not record
-  specific smoke-run numbers for this phase beyond confirming the script
-  produces finite losses for both reductions with matching epoch counts.
+- **Question:** Does training look different/better under `"sum"` vs. `"mean_active"`?
+- **Outcome:** Both reductions produce finite losses with matching epoch
+  counts; `docs/training_notes.md` does not record specific smoke-run numbers.
 
 ### Phase 3c-8 — Task schedule comparison (`compare_task_schedules.py`)
 
-- **Question:** How does the **paper's presentation schedule**
-  (`SCHEDULES["paper"] = {REP: 1, COMP: 3, SPK: 2}`, 6 trials/word) compare to
-  a **uniform schedule** (`{REP: 1, COMP: 1, SPK: 1}`, 3 trials/word)?
-  Pseudowords always get `1×REP` regardless of schedule.
-- **What it does:** Builds trials in a fixed within-word order
-  (`REP×n_rep, COMP×n_comp, SPK×n_spk`), shuffles the full list every epoch,
-  and compares the two schedules with `--loss-reduction mean_active` (the
-  default for this script, since `mean_active` is more informative when
-  `trials_per_epoch` differs between conditions — `paper` produces 2× the
-  trials of `uniform`).
-- **How to interpret:** `% decrease` and per-task `initial→final` losses;
-  `trials_per_epoch["paper"] > trials_per_epoch["uniform"]` is asserted by the
-  tests.
-- **Outcome recorded in docs:** Marked Complete `✓`; `docs/training_notes.md`
-  documents the comparison methodology but does not record specific smoke-run
-  loss numbers for this phase.
+- **Question:** How does the paper's schedule (`1×REP/3×COMP/2×SPK`) compare
+  to a uniform schedule (`1/1/1`)?
+- **Outcome:** Marked Complete `✓`; comparison methodology documented.
 
 ### Phase 3c-9 — Frequency-weighting diagnostics (`compare_frequency_weighting.py`)
 
-- **Question:** Does multiplying each word's loss by a frequency-derived
-  weight (`compute_word_weights`, source `"zipf"` or `"frequency"`,
-  normalised so the mean weight is 1) change training dynamics, and is the
-  `loss_weight` plumbing (`SupervisedTrial.loss_weight`,
-  `train_step`'s conditional multiply) correct?
-- **What it does:** Builds trials once; "unweighted" uses them as-is,
-  "weighted" applies `apply_weights_to_trials()` (which only weights trials
-  whose `label` starts with `"word:"`, guarding against `row_index` collisions
-  between `wfe.csv` and `ssp.csv`). Same seed/schedule/epochs for both.
-- **How to interpret:** The "weighted" initial average loss may differ from
-  "unweighted" simply because `train_step` returns the *weighted* loss value
-  — compare `% decrease` **within** each condition, not absolute values
-  across conditions. Weight stats (min/mean/max) are printed first.
-- **Outcome recorded in docs:** Marked Complete `✓`, including unit tests that
-  `loss_weight=1.0` is numerically identical to no weighting and
-  `loss_weight=2.0` gives ≈2× loss. No specific smoke-run loss numbers
-  recorded for the frequency comparison itself.
+- **Question:** Does per-word frequency weighting (`SupervisedTrial.loss_weight`)
+  change training dynamics?
+- **Outcome:** Marked Complete `✓`. Unit tests confirm `loss_weight=1.0` is
+  numerically identical to no weighting; `loss_weight=2.0` gives ≈2× loss.
 
 ### Phase 3c-10 — LR schedule diagnostics (`compare_lr_schedules.py`)
 
 - **Question:** Does the paper's 5-phase LR decay (`0.5` for epochs 1–150,
-  stepping down to `0.1` by epoch 200, `[Paper]`) — proportionally rescaled to
-  whatever `--epochs` is requested — change small-subset training dynamics
-  vs. a constant LR?
-- **What it does:** `lr_for_epoch(base_lr, epoch, lr_schedule, total_epochs)`
-  maps the paper's epoch-fraction boundaries (75/80/85/90% →
-  ×1.0/0.8/0.6/0.4/0.2) onto the requested epoch count; `run_diagnostic_epochs()`
-  gained an `lr_schedule_fn` hook that overwrites `optimizer.param_groups[*]["lr"]`
-  at the start of each epoch. Both conditions share `--task-schedule` and
-  `--frequency-source`.
-- **How to interpret:** `lr_schedule_used["constant"]` should be flat;
-  `lr_schedule_used["paper"]` should decay over the run. Compare `%decrease`
-  and final losses as elsewhere.
-- **Outcome recorded in docs:** Marked Complete `✓`; no specific smoke-run
-  numeric outcome recorded beyond the schedule-shape tests passing.
+  stepping down to `0.1` by epoch 200) — proportionally rescaled — change
+  small-subset training dynamics?
+- **Outcome:** Marked Complete `✓`; schedule-shape tests pass.
 
 ### Phase 3c-11 — Integrated training recipe diagnostics (`compare_training_recipes.py`)
 
-- **Question:** Do the four dimensions above **combine sensibly** when fixed
-  into named "recipes," rather than varied one at a time?
-- **What it does:** `RecipeConfig` bundles `task_schedule` / `loss_reduction` /
-  `frequency_source` / `lr_schedule`. `RECIPES` defines four recipes — all
-  using `task_schedule="paper"` and `loss_reduction="mean_active"`:
-
-  | Recipe | frequency_source | lr_schedule |
-  |---|---|---|
-  | `baseline_constant` | none | constant |
-  | `frequency_constant` | frequency | constant |
-  | `frequency_paper_lr` | frequency | paper |
-  | `zipf_constant` (optional control) | zipf | constant |
-
-  `run_recipe_comparison()` validates every recipe (`validate_recipe_config`),
-  caches base trials by `task_schedule` and frequency-weight maps by
-  `frequency_source`, then runs each recipe with a fresh
-  model/optimizer/seed. `print_recipe_comparison_table()` prints frequency
-  weight stats, a summary table (incl. `% decrease`), and final per-task
-  training losses.
-- **How to interpret:** Same `% decrease` caveat as 3c-9; **additionally**,
-  per-task losses for `frequency_*` recipes are **weighted training losses**
-  from `train_step()`, *not* a separate unweighted evaluation pass.
-- **Outcome — validated smoke run** (`--mode mixed-multitask --max-words 10
-  --max-pseudowords 10 --epochs 20 --lr 0.01 --device cpu --seed 0`, default
-  recipes `baseline_constant frequency_constant frequency_paper_lr`):
-  - `baseline_constant` and `frequency_constant` behaved **similarly** over 20
-    epochs.
-  - `frequency_paper_lr` was **slightly slower** to decrease loss on this
-    short diagnostic — consistent with its LR decay reducing effective step
-    size in later epochs.
-  - Reported losses for the frequency-weighted recipes remain **weighted
-    training losses**, not unweighted evaluation metrics — a caveat to keep in
-    mind before drawing conclusions about whether frequency weighting "helps."
+- **Question:** Do the four dimensions combine sensibly into named "recipes"?
+- **Recipes:** `baseline_constant`, `frequency_constant`, `frequency_paper_lr`,
+  `zipf_constant`.
+- **Validated smoke run outcome:** `baseline_constant` and `frequency_constant`
+  behaved similarly over 20 epochs; `frequency_paper_lr` was slightly slower to
+  decrease loss, consistent with LR decay reducing effective step size in later
+  epochs.
 
 ---
 
-## 7. Paper / supplement alignment table
+## 7. Level 1B safe cleanup
+
+### What was extracted and where it went
+
+Phase 3e (Level 1B) extracted pure, reusable functions from
+`scripts/train_repetition_only.py` into three new library modules in
+`src/lichtheim2/`. The train script re-imports them under their original private
+names (e.g. `from lichtheim2.metrics import rolling_mean as _rolling_mean`) so
+no call sites changed and no behavior changed.
+
+| Function group | Extracted to | Reason |
+|---|---|---|
+| `_compute_repetition_metric_breakdown`, `_compute_repetition_word_accuracy`, `_prediction_summary`, `_rolling_mean` | `src/lichtheim2/metrics.py` | Pure tensor functions; no model dependencies; independently testable |
+| `_evaluate_one_trial`, `evaluate_predictions` | `src/lichtheim2/repetition_evaluation.py` | Eval-mode model runner; can be used from notebooks or future scripts |
+| `_compute_trial_loss_decomposition`, `_compute_epoch_loss_decomp` | `src/lichtheim2/loss_decomposition.py` | Diagnostic-only; intentionally separate from `losses.py` to avoid confusion with the training objective |
+| `_rolling_mean` (duplicate) | Removed from `plot_repetition_metrics.py`; now imports from `metrics.py` | De-duplicates identical function |
+
+### What files were NOT modified
+
+- `model.py` — unchanged. `forward_tick` equations unmodified.
+- `trainer.py` — unchanged.
+- `losses.py` — unchanged.
+- `tasks.py` — unchanged.
+- `trials.py` — unchanged.
+- `layers.py` — unchanged.
+- `config.py` — unchanged.
+- `encoding.py` — unchanged.
+- CLI flags, defaults, help text — unchanged.
+- Output file formats (`metrics.csv` columns, `run_config.json` keys, `predictions*.json` keys) — unchanged.
+
+### How `train_repetition_only.py` is now an orchestrator
+
+After Level 1B, `train_repetition_only.py` contains only:
+1. CLI argument parsing (`parse_args`, `validate_args`)
+2. Data loading and trial construction (`build_repetition_trials`)
+3. The training epoch loop (`run_training`)
+4. Output saving (`save_run_config`, `save_metrics_csv`, `save_predictions`, `save_loss_curve`)
+5. `main()`
+
+All computational logic lives in library modules. This enables future scripts
+(e.g. `train_multitask.py`, notebook-based analysis) to import and call
+`evaluate_predictions` or `compute_epoch_loss_decomp` directly.
+
+### Why the import-alias pattern
+
+```python
+# In train_repetition_only.py, after Level 1B:
+from lichtheim2.metrics import (
+    compute_repetition_metric_breakdown as _compute_repetition_metric_breakdown,
+    ...
+)
+```
+
+Existing tests (e.g. `test_loss_decomposition.py`) load the train script via
+`importlib.util.exec_module` at module import time and access functions by
+their private-underscore names. The alias preserves those names in the script's
+namespace, so all existing tests continue to pass without modification. This is
+a behavior-preserving refactor by construction.
+
+### Test status after Level 1B
+
+**429 tests passed. Smoke run passed.**
+
+New test files added:
+- `tests/test_repetition_metrics.py` — 11 tests for `metrics.py`
+- `tests/test_repetition_evaluation.py` — 5 tests for `repetition_evaluation.py`
+- `tests/test_loss_decomposition.py` — 8 pre-existing tests, not modified
+
+---
+
+## 8. Metrics and diagnostic evaluation
+
+### Where metrics come from
+
+The training script (`train_repetition_only.py`) runs `evaluate_predictions`
+before and after training and prints a table of metrics. These metrics come
+from `metrics.py` via `repetition_evaluation.py::evaluate_one_trial`.
+
+### Per-trial metrics returned by `evaluate_one_trial`
+
+All metrics are computed on the **output phase only** (ticks T..2T-1) unless
+noted.
+
+| Metric | Key | What it measures |
+|---|---|---|
+| Argmax accuracy | `phoneme_accuracy` | Fraction of output ticks where `argmax(motor_output) == argmax(motor_target)`. Main measure of phoneme production. |
+| Threshold accuracy (mixed) | `threshold_accuracy` | Fraction of all (output-tick, unit) pairs where `|output − target| < 0.1`. **Dominated by the 38 negative units.** See below. |
+| Exact match | `exact_match` | True iff argmax matches target at every output tick. Very strict; near zero at start. |
+| Input silence threshold | `input_silence_threshold_acc` | Fraction of (input-tick, unit) pairs with activation < 0.1. Measures whether the model stays silent while listening. |
+| Output negative threshold | `output_negative_threshold_acc` | Fraction of output-phase negative-target (target=0) units with activation < 0.1. Rises early in training as negative suppression is learned. |
+| Output positive threshold | `output_positive_threshold_acc` | Fraction of output-phase positive-target (target=1) units with activation > 0.9. Rises slowly; measures actual phoneme production. |
+| Mean positive activation | `mean_positive_output` | Mean activation of the one target unit per output tick. Rising above 0.5 is the earliest reliable signal of phoneme learning. |
+| Mean negative activation | `mean_negative_output` | Mean activation of the 38 non-target units per output tick. Should stay near 0. |
+| Mean max motor | `mean_max_motor_output` | Mean per-tick max across all motor units. Increases when the model starts producing any phoneme. |
+| Output word accuracy | `output_all_units_within_radius` | True iff every (output-tick, unit) pair is within `eval_radius=0.1` of its target. Candidate paper-like word accuracy `[Open #9]`. |
+| Input silence accuracy | `input_all_silent_within_radius` | True iff every motor unit during the input phase is below `eval_radius`. |
+| Strict trial accuracy | `trial_all_supervised_units_within_radius` | AND of the two above. Strictest criterion. |
+
+### The 38:1 imbalance problem
+
+With 39-dimensional one-hot encoding, each output tick has:
+- **1 positive-target unit** (`target = 1.0`)
+- **38 negative-target units** (`target = 0.0`)
+
+The gradient direction in weight space initially favors **suppression** of all
+motor output (reducing all 38 negative-unit BCE values) over selective
+activation of the single positive unit. A model can reduce total BCE loss
+substantially while failing to produce any correct phonemes. Signs of this
+pathology:
+- `threshold_accuracy` (mixed) rises while `output_positive_threshold_acc` stays near 0
+- `output_negative_threshold_acc` rises while `mean_positive_output` stays below 0.5
+- `avg_loss` decreases while `phoneme_accuracy` stays near chance
+
+For a detailed analysis of why this happens and strategies to address it
+(`output_positive_weight`, `zero_error_radius`, `loss_reduction`), see
+`docs/loss_masks_zero_radius.md` sections 5–8.
+
+### Why `threshold_accuracy` is misleading as a primary metric
+
+Starting from sigmoid(bias = −1) ≈ 0.27, all motor units are initially above
+zero. The model can quickly learn to push all outputs toward zero, scoring
+~97% threshold accuracy (38 out of 39 units have target=0) while producing no
+correct phonemes. **Always report argmax accuracy and `mean_positive_output`
+alongside threshold accuracy.**
+
+### Diagnostic BCE decomposition
+
+After each training epoch, `compute_epoch_loss_decomp` runs a second eval-mode
+forward pass and reports:
+
+| Key | Meaning |
+|---|---|
+| `avg_eval_input_bce` | Mean BCE on input-phase ticks (motor must be silent) |
+| `avg_eval_output_pos_bce` | Mean BCE on the 1 positive unit per output tick |
+| `avg_eval_output_neg_bce` | Mean BCE on the 38 negative units per output tick |
+| `avg_eval_motor_bce` | Sum of the above three |
+| `avg_eval_*_per_active` | Per-active-unit BCE (after dead zone) |
+
+**Typical learning pattern:**
+1. `output_neg_bce` drops first (easy: suppress all units)
+2. `input_bce` drops moderately (motor silent during listening)
+3. `output_pos_bce` drops last (hard: activate only the correct phoneme)
+
+A model that only achieves step 1 has learned to suppress but not to produce.
+
+---
+
+## 9. Paper / supplement alignment table
 
 | Component | Paper / supplement claim | Current implementation | Confidence |
 |---|---|---|---|
@@ -704,75 +894,66 @@ condition do `torch.manual_seed(seed)` → fresh `Lichtheim2Model` → fresh
 | Standard feedforward weight init `[-1,1]` | `[Paper]` | `nn.init.uniform_(-1,1)` on 7 connections | Paper |
 | Elman weight init `[-0.5,0.5]` (`iSMG_elman`) | `[Paper]` | `nn.init.uniform_(-0.5,0.5)` | Paper |
 | Copy-back weight init `[-0.5,0.5]` (`motor_copy_to_iSMG`, `vATL_in_to_aSTG`) | Paper says "recurrent connections" use `[-0.5,0.5]`; doesn't explicitly say copy-back qualifies | Same `[-0.5,0.5]` range applied | Inferred |
-| Bias = −1.0 on hidden/output layers | `[Paper]` describes LENS bias-link convention suppressing early activation; exact `nn.Linear.bias` mapping unspecified | `nn.init.constant_(bias, -1.0)` on the 7 modules with `bias=True`; `triangularis_to_motor` and the 3 copy/Elman layers have `bias=False` | Inferred |
+| Bias = −1.0 on hidden/output layers | `[Paper]` describes LENS bias-link convention suppressing early activation; exact `nn.Linear.bias` mapping unspecified | `nn.init.constant_(bias, -1.0)` on the 7 modules with `bias=True` | Inferred |
 | iSMG Elman self-recurrence | `[Paper]` | `iSMG_context` copy + `iSMG_elman` | Paper |
 | Insular-motor → iSMG copy-back | `[Supp Fig S1]` | `motor_context` copy + `motor_copy_to_iSMG` | Supplement |
 | vATL_out → vATL_in copy-back into aSTG | `[Supp Fig S1]` | `vATL_context` copy + `vATL_in_to_aSTG`; overridden by `clamp_vATL_in` during speaking | Supplement |
-| aSTG/STS copy-back to mSTG | Unclear whether a dedicated copy layer exists (D4) | **Not implemented** — no feedback connection from aSTG to mSTG | Open (D4) |
+| aSTG/STS copy-back to mSTG | Unclear whether a dedicated copy layer exists (D4) | **Not implemented** | Open (D4) |
 | Trial-initial state (hidden incl. vATL_out = 0.5, motor = 0) | `[Paper]` | `init_state()` | Paper |
-| Repetition: `2T` ticks, motor silent then reproduces phonemes | `[Paper]` (fixed `T=3`); generalisation to variable `T` | `build_trial_inputs` + `make_repetition_trial`, `T` from `phon_pattern.shape[0]` | Paper (structure) / Inferred (variable `T`) |
-| Comprehension: evaluated at "tick 3" (last tick of 3) | `[Paper]` | Current code applies semantic **and** motor loss at **every** tick (`T` of them), not only the last | Paper (last-tick claim) / Inferred (every-tick implementation is a generalisation, not confirmed equivalent) |
-| Speaking: semantic input clamped, motor evaluated; exact eval tick(s) | `[Paper]` clamping; eval tick(s) `[Open]` (D5) | Motor loss applied at every tick | Paper (clamping) / Open (eval ticks, D5) |
-| Loss function: cross-entropy `[Paper — Hinton 1989]` | `[Paper]` | `F.binary_cross_entropy` on sigmoid outputs | Inferred (BCE as the PyTorch analogue of LENS cross-entropy; exact equivalence unverified) |
-| Zero-error radius = 0.1 | `[Paper]` | `zero_error_radius` parameter on `compute_trial_loss`/`train_step`; **default `0.0`** in core code and most diagnostics (one real-data script defaults to `0.1`) | Paper (value) / Inferred (default usage) |
-| Presentation schedule: 1×REP, 3×COMP, 2×SPK per word per epoch | `[Paper/Supp]` | `SCHEDULES["paper"]` in `compare_task_schedules.py` — **opt-in diagnostic**, not the default in `trainer.py`/core training | Paper (numbers) / Open (not yet the default training loop) |
-| LR schedule: 0.5 → stepped decay → 0.1 over 200 epochs | `[Paper]` | `lr_for_epoch()` in `compare_lr_schedules.py`, proportionally rescaled to `--epochs` — **opt-in diagnostic only** | Paper (schedule) / Inferred (proportional rescaling for non-200 epoch counts) |
-| Weight decay schedule (1e-6 → 6e-7 stepped) | `[Paper]` | Not implemented anywhere | Open / not implemented |
+| Repetition: `2T` ticks, motor silent then reproduces phonemes | `[Paper]` (fixed `T=3`); generalisation to variable `T` | `build_trial_inputs` + `make_repetition_trial` | Paper (structure) / Inferred (variable `T`) |
+| Comprehension: evaluated at "tick 3" (last tick of 3) | `[Paper]` | Current code applies semantic **and** motor loss at **every** tick | Paper (last-tick claim) / Inferred (every-tick implementation) |
+| Speaking: semantic input clamped, motor evaluated | `[Paper]` clamping; eval tick(s) `[Open]` (D5) | Motor loss applied at every tick | Paper (clamping) / Open (eval ticks, D5) |
+| Loss function: cross-entropy `[Paper — Hinton 1989]` | `[Paper]` | `F.binary_cross_entropy` on sigmoid outputs | Inferred (BCE as PyTorch analogue of LENS cross-entropy) |
+| Zero-error radius = 0.1 | `[Paper]` | `zero_error_radius` parameter; **default `0.0`** in core code | Paper (value) / Inferred (default usage) |
+| Presentation schedule: 1×REP, 3×COMP, 2×SPK per word per epoch | `[Paper/Supp]` | `SCHEDULES["paper"]` in `compare_task_schedules.py` — **opt-in diagnostic** | Paper (numbers) / Open (not yet the default training loop) |
+| LR schedule: 0.5 → stepped decay → 0.1 over 200 epochs | `[Paper]` | `lr_for_epoch()` in `compare_lr_schedules.py` — **opt-in diagnostic only** | Paper (schedule) / Inferred (proportional rescaling) |
+| Weight decay schedule (1e-6 → 6e-7 stepped) | `[Paper]` | Not implemented | Open / not implemented |
 | Online (item-by-item, batch_size=1) updates | `[Supp]` | `train_step()` processes one `SupervisedTrial` per call | Supplement |
-| Phonological representation: 21-bit Japanese mora distinctive features, 3 morae/word | `[Supp]` | English config: 39-dim one-hot over ARPAbet phonemes (`No_Stress`), variable length `T` | Supplement (Japanese) / Inferred (English one-hot encoding choice, D14 Open) |
-| Semantic representation: 50-bit, 50 prototypes × 40 exemplars, 20 on-bits, ≥4-bit Hamming distance | `[Supp]` | `assign_artificial_semantics()` — independent random 50-bit binary vectors, no prototype structure | Inferred (placeholder; D15 Open/Provisional) |
-| Backpropagation scope (full vs. truncated BPTT within a trial) | `[Open]` per paper | `run_trial` builds one graph per trial; `loss.backward()` called once per trial → full BPTT within the trial | Inferred / Open (D6) |
+| Phonological representation: 21-bit Japanese mora features | `[Supp]` | English config: 39-dim one-hot over ARPAbet phonemes | Supplement (Japanese) / Inferred (English one-hot encoding choice, D14 Open) |
+| Semantic representation: prototype-based (50-bit, 50 prototypes × 40 exemplars) | `[Supp]` | `assign_artificial_semantics()` — independent random 50-bit binary vectors | Inferred (placeholder; D15 Open/Provisional) |
+| Backpropagation scope (full vs. truncated BPTT within a trial) | `[Open]` per paper | `run_trial` builds one graph per trial; `loss.backward()` called once → full BPTT within the trial | Inferred / Open (D6) |
 | Lesioning (pathway zeroing + recovery training) | `[Paper]` | Not implemented; per-connection `nn.Linear` design intended to support it (Phase 4) | Open / Pending |
 
 ---
 
-## 8. Open questions before Phase 4
+## 10. Open questions before Phase 4
 
 These are the items worth resolving (or at least explicitly deferring) before
 moving to larger controlled training and lesioning:
 
-- **Evaluation metrics.** No accuracy/word-correct metric exists yet. The
-  paper reports "proportion of words correct per epoch per task" (Figure 2),
-  defined via the zero-error radius `[Inferred from paper description of
-  Figure 2]`. We need to decide and implement this before any run can be
-  compared to Figure 2.
 - **Full integrated training recipe.** Phases 3c-7 through 3c-11 are all
-  small-subset (≈10 word) diagnostics. None of them constitutes "the" training
-  run — `compare_training_recipes.py`'s recipes are diagnostic comparisons,
-  not a committed default. A decision is needed on: which recipe (if any)
-  becomes the default in `trainer.py`/a new full-training script, what
-  vocabulary subset/size to use, and how many epochs.
+  small-subset (≈10 word) diagnostics. A decision is needed on: which recipe
+  (if any) becomes the default in `trainer.py`/a new full-training script,
+  what vocabulary subset/size to use, and how many epochs.
+- **Vocabulary scale.** Preliminary results suggest the model learns well on
+  ~200 words but struggles with 1200. Whether this is a capacity issue
+  (one-hot 39D encoding, no shared phonological features across phoneme classes)
+  or an optimization issue (learning rate, number of epochs, `output_positive_weight`)
+  is unresolved. The `--sound-proj-size` option provides a dense learned
+  embedding that may help, at the cost of departing from the paper.
 - **Weighted training vs. unweighted evaluation.** As flagged in 3c-9 and
   3c-11, frequency-weighted recipes currently report *weighted* training
   losses. If frequency weighting is adopted, an unweighted evaluation pass
-  (separate from `train_step`) will be needed so that "did it learn" isn't
-  confounded with "how is the loss scaled."
+  will be needed.
 - **Exact semantic target design (D15).** Random independent binary vectors
-  vs. the supplement's prototype-based scheme (50 prototypes × 40 exemplars,
-  20 on-bits, ≥4-bit Hamming distance). This affects both how "learnable" the
-  comprehension/speaking tasks are and whether semantic similarity structure
-  (relevant for later RSA, Phase 5) exists at all.
-- **Lesioning protocol (Phase 4).** Nothing implemented yet. Needs: which
-  pathways/connections correspond to which aphasia profiles in the paper, how
-  lesions are applied (zeroing vs. noise, per `docs/replication_spec.md`
-  §9), and what "recovery training" looks like operationally.
+  vs. the supplement's prototype-based scheme. This affects both how
+  "learnable" the comprehension/speaking tasks are and whether semantic
+  similarity structure exists at all.
+- **Lesioning protocol (Phase 4).** Needs: which pathways correspond to which
+  aphasia profiles, how lesions are applied (zeroing vs. noise), and what
+  "recovery training" looks like operationally.
 - **Comparison with paper results.** Even informally, no run has yet been
   compared against the paper's Figure 2 learning curves or Figure 3 lesion
-  profiles — this depends on the evaluation metric above and on settling D2
-  (what counts as a "successful" replication: curve-shape only, ~10% accuracy
-  match, or maximal numerical fidelity).
-- Related still-open items worth keeping visible: **D4** (aSTG↔mSTG
-  copy-back), **D5** (speaking evaluation tick(s)), **D6** (BPTT scope), **D8**
-  (presentation order — fully random vs. task-blocked), **D12**
-  (padding/batching/EOS — currently everything is unbatched), **D16/D17**
-  (frequency/lexicality effects and whether pseudowords get
-  comprehension/speaking trials).
+  profiles.
+- Related still-open items: **D4** (aSTG↔mSTG copy-back), **D5** (speaking
+  evaluation tick(s)), **D6** (BPTT scope), **D8** (presentation order),
+  **D12** (padding/batching/EOS), **D16/D17** (frequency/lexicality effects).
 
 ---
 
-## 9. Oral explanation
+## 11. Oral explanation and questions to be ready for
 
-### How I would explain this in 5 minutes
+### How to explain this in 5 minutes
 
 > "This is a PyTorch reimplementation of the Lichtheim 2 model from Ueno et
 > al. 2011 — a neurocomputational model with two pathways: a dorsal pathway
@@ -806,22 +987,190 @@ moving to larger controlled training and lesioning:
 > ticks, masked binary cross-entropy loss, backward, one SGD step — that's
 > the paper's 'online learning.'
 >
-> Most of the recent work has been **diagnostics**, not the model itself: five
-> small scripts that each test one training-loop choice — sum vs. normalised
-> loss, the paper's 1/3/2 task presentation schedule vs. a uniform one,
-> frequency-weighted training, the paper's learning-rate decay schedule, and
-> finally combinations of all four — each on a tiny ~10-word subset, just to
-> make sure these choices behave sensibly before committing to a real run.
->
-> What's *not* done yet: lesioning, any accuracy metric to compare against the
-> paper's Figure 2, the faithful prototype-based semantic vectors from the
-> supplement, and any full-scale training run. Several architectural details
-> — like whether aSTG feeds back to mSTG, and exactly which ticks are scored
-> for naming — are still open questions flagged in the docs rather than
-> resolved guesses."
+> What's *not* done yet: lesioning, faithful prototype-based semantic vectors
+> from the supplement, and any full-scale training run. Several architectural
+> details — like whether aSTG feeds back to mSTG, and exactly which ticks are
+> scored for naming — are still open questions flagged in the docs."
+
+### Questions to be ready for
+
+**"Why not nn.RNN?"**
+`nn.RNN` manages the recurrence internally and bundles all timesteps in a
+single forward call. This model needs to clamp different inputs at each tick
+depending on the task (phonemes in input phase, silence in output phase,
+semantic clamp in speaking). It also needs to write different targets for
+each tick. An `nn.RNN` would require hacking around these requirements. The
+explicit tick loop enables per-tick introspection via `TickResult`, which is
+required for future lesioning work. The cost is speed; the benefit is
+transparency and faithfulness to the LENS formulation.
+
+**"Why sigmoid?"**
+The paper uses sigmoid. Sigmoid outputs in [0,1] model bounded continuous
+activation and are compatible with BCE loss. ReLU produces unbounded outputs,
+making BCE undefined. Changing to ReLU + alternative loss would be a
+different scientific formulation. LENS (the original simulator) used sigmoid
+units throughout.
+
+**"What is copy-back?"**
+At the end of each tick, the activation of iSMG is saved and fed back as
+input to iSMG at the next tick (Elman self-recurrence). The motor output is
+saved and fed back into iSMG (motor copy-back — the phonological feedback
+loop). And vATL output is saved and fed back into aSTG (semantic recurrence).
+These implement temporal integration — the model can "remember" what it heard
+and what it produced. In `ModelState`, the `*_context` fields carry this
+memory. In `forward_tick`, these context fields appear on the right-hand side
+of the equations.
+
+**"Is motor_copy_to_iSMG a real copy?"**
+No. The name follows the paper's vocabulary of "copy connections" (meaning
+"feedback pathway"), but the implementation is a learned `nn.Linear(39, 50,
+bias=False)` with weights initialized to `uniform(−0.5, 0.5)`. It transforms
+the motor output through a learnable projection before adding it to the iSMG
+net input.
+
+**"When does backward happen?"**
+Once per word, after all 2T ticks have been forward-passed. `run_trial()`
+builds the full computational graph for all ticks. `compute_trial_loss()`
+sums BCE values across all ticks. Then `loss.backward()` propagates
+gradients backwards through all 2T ticks in one call. This is full BPTT
+within the trial. There is no `.detach()` between ticks.
+
+**"What does the mask do?"**
+`motor_loss_mask` is a boolean vector of length 2T, all `True` for
+repetition. It is broadcast to `(2T, 39)` to create an element-wise alive
+mask, then multiplied by the raw BCE tensor before summing. All ticks
+(including the input/silence phase) contribute to the loss.
+
+**"Why did output_positive_weight help?"**
+With one-hot 39D encoding, there is 1 positive unit and 38 negative units per
+output tick. The 38 negative units are easy to suppress and generate 38 times
+as many gradient signals as the 1 positive unit. By multiplying the positive
+unit loss by a weight > 1, the gradient pressure on the correct phoneme
+is increased relative to the suppression signals. This counteracts the early
+learning pathology where the model reduces loss by suppressing everything
+rather than by activating the correct phoneme.
+
+**"Why does 200 words work but 1200 not yet?"**
+With 200 words, the model can memorize item-specific motor patterns. With
+1200 words, it needs to generalize — to learn phonological features shared
+across words. The 39D one-hot encoding has no shared structure between
+phonetically similar phonemes (e.g. /p/ and /b/ share no active bits). The
+model must learn phonological similarity purely from the input/output co-
+occurrence statistics. The `--sound-proj-size` option provides a dense
+learned embedding that may help, at the cost of departing from the paper.
+
+**"What is the safest batching strategy?"**
+Zero-pad all sequences in a batch to the length of the longest word.
+Use a boolean padding mask that is False at padded positions. Apply the
+padding mask in `compute_trial_loss()` instead of the per-trial
+`motor_loss_mask`. The BCE computation remains identical; only the
+vectorization changes. This should produce near-identical results to online
+training. Batch-size-1 behavior must be verified numerically equivalent to
+the current single-trial implementation. Results with batch_size > 1 should
+be reported with the caveat that gradient averaging differs from the paper's
+online learning. See `docs/modernization_options.md` Level 4.
+
+**"What would EOS change?"**
+EOS would add a stop token to the phoneme vocabulary. The model would need
+to predict both what phoneme to produce and when to stop. The loss would need
+to become CrossEntropyLoss on a softmax distribution over phonemes+EOS.
+This fundamentally changes the task from "produce a specific continuous
+activation level at each predetermined tick" to "predict the next phoneme
+as a categorical distribution until stop." BCE + sigmoid is the paper
+formulation. CrossEntropy + softmax is a different model. See
+`docs/modernization_options.md` Level 5.
+
+**"What is faithful vs. diagnostic?"**
+Faithful means the implementation directly reflects Ueno et al. 2011:
+dual-pathway architecture, sigmoid units, online SGD, BCE loss,
+`zero_error_radius=0.1`. Diagnostic means additions made to understand or
+debug the model, not described in the paper: `dorsal_motor_only`,
+`output_positive_weight`, loss decomposition by phase and unit polarity,
+`sound_proj_size`, `eval_radius` separate from training radius. Diagnostic
+features are always flagged in comments and CLI help text. A full reference
+table is in `docs/diagnostic_vs_faithful.md`.
+
+**"What is the current repetition-only result on 200 words?"**
+This depends on the specific experimental conditions (epochs, LR, radius).
+Point to the most recent `outputs/` run directory and the `predictions_after.json`
+and `metrics.csv` files for exact numbers. The loss decomposition curves
+(if `--log-loss-decomp` was on) show input_bce, output_neg_bce, and
+output_pos_bce separately and are the clearest summary of what the model has
+actually learned.
 
 ---
 
-*Document scope: this walkthrough describes the state of the repository as of
-the `docs/repo-walkthrough` branch. It is documentation only — no source files
-were modified.*
+## 12. Meeting-ready summary
+
+A condensed reference for preparing to walk someone through the codebase.
+
+### The code path in one paragraph
+
+A word is loaded from `wfe.csv` as a `WordItem` with `phon_tensor` of shape
+`(T, 39)`. It becomes a `SupervisedTrial` with `motor_targets = [zeros(T,39);
+phon_tensor]` and `motor_loss_mask = ones(2T, bool)`. The model runs
+`forward_tick` for each of 2T ticks: ticks 0..T-1 hear the phonemes; ticks
+T..2T-1 are silent. All 9 `ModelState` fields update each tick via sigmoid
+on linear combinations. After all 2T ticks, the single loss
+`sum(BCE(outputs, targets) × alive_mask)` is computed and `loss.backward()`
+propagates gradients through the full 2T-tick graph. `optimizer.step()` (SGD)
+updates all ~350k parameters.
+
+### The loss in one paragraph
+
+Motor outputs are stacked to shape `(2T, 39)`. BCE is computed element-wise
+with `reduction="none"`. A boolean alive mask (broadcast from `motor_loss_mask
+(2T,)` to `(2T, 39)`) removes ticks outside the loss window — for repetition,
+all ticks are masked True. If `zero_error_radius > 0`, elements where
+`|output − target| < radius` are additionally excluded (hard-gated, no
+gradient). The surviving BCEs are summed to a scalar. `loss.backward()` is
+called once for the whole trial — this is full BPTT through all 2T ticks.
+
+### The cleanup in one paragraph
+
+Level 1B extracted pure metric and evaluation functions from the 1149-line
+train script into three new library modules in `src/lichtheim2/`: `metrics.py`
+(pure tensor functions), `repetition_evaluation.py` (eval-mode model runner),
+`loss_decomposition.py` (diagnostic BCE decomposition). The train script re-
+imports them under their original private names, so no call sites changed and
+all 429 tests continued to pass. `model.py`, `losses.py`, `trainer.py`, and
+`tasks.py` were not touched.
+
+### Quick reference
+
+| Symbol | Meaning | Size (english_nwr config) |
+|---|---|---|
+| T | Phonemes in one word | variable (e.g. 5 for "attend") |
+| 2T | Total ticks for repetition | variable |
+| N | Phoneme inventory size | 39 |
+| iSMG | Inferior supramarginal gyrus (dorsal hidden) | 50 |
+| mSTG | Middle superior temporal gyrus (ventral first hidden) | 200 |
+| aSTG | Anterior superior temporal gyrus (ventral second hidden) | 650 |
+| vATL | Ventral anterior temporal lobe (semantic) | 50 |
+| tri | Triangularis-opercularis | 200 |
+| Motor | Motor output | 39 |
+
+| Term | File | Meaning |
+|---|---|---|
+| `ModelState` | `layers.py` | 9-tensor carry state between ticks |
+| `TickResult` | `layers.py` | Full record of one tick (inputs + state) |
+| `SupervisedTrial` | `trials.py` | Targets + masks for one word |
+| `forward_tick` | `model.py` | One tick of computation |
+| `run_trial` | `model.py` | Full word (2T ticks) |
+| `train_step` | `trainer.py` | Forward + backward + optimizer step |
+| `motor_loss_mask` | `trials.py` | Which ticks contribute to loss (all True for repetition) |
+| `zero_error_radius` | `losses.py` | Dead zone threshold; paper value 0.1 |
+| `output_positive_weight` | `losses.py` | Diagnostic: upweight positive phoneme unit loss |
+| `iSMG_context` | `layers.py` | Elman copy: iSMG state from previous tick |
+| `motor_context` | `layers.py` | Motor copy-back: motor from previous tick |
+| `vATL_context` | `layers.py` | vATL feedback: vATL_out from previous tick |
+| `dorsal_motor_only` | `model.py` | Diagnostic: exclude ventral from motor sum |
+| `avg_eval_*` | `loss_decomposition.py` | Post-epoch eval pass (not the training loss) |
+| `evaluate_predictions` | `repetition_evaluation.py` | Eval-mode model runner (before/after training) |
+| `prediction_summary` | `metrics.py` | 15-key aggregate over a list of trial predictions |
+
+---
+
+*Document scope: this walkthrough describes the state of the repository after
+Phase 3e / Level 1B safe cleanup. No Python source files were modified in the
+production of this document.*
