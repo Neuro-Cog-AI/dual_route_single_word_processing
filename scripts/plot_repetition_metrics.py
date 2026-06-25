@@ -20,6 +20,10 @@ import csv
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from lichtheim2.metrics import rolling_mean as _rolling_mean  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Data loading
@@ -43,20 +47,6 @@ def load_metrics(csv_path: Path) -> list[dict[str, float]]:
                     coerced[k] = v
             rows.append(coerced)
     return rows
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _rolling_mean(values: list[float], window: int) -> list[float]:
-    """Left-aligned trailing rolling mean; no external deps."""
-    out = []
-    for i in range(len(values)):
-        start = max(0, i - window + 1)
-        out.append(sum(values[start : i + 1]) / (i - start + 1))
-    return out
 
 
 # ---------------------------------------------------------------------------

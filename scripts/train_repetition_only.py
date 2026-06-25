@@ -57,7 +57,6 @@ from datetime import datetime
 from pathlib import Path
 
 import torch
-import torch.nn.functional as F
 import torch.optim as optim
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -65,7 +64,21 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from lichtheim2.config import ModelConfig, load_config
 from lichtheim2.data import PseudowordItem, WordItem, load_pseudoword_items, load_word_items
 from lichtheim2.encoding import load_phoneme_inventory
+from lichtheim2.loss_decomposition import (
+    compute_epoch_loss_decomp as _compute_epoch_loss_decomp,
+    compute_trial_loss_decomposition as _compute_trial_loss_decomposition,
+)
+from lichtheim2.metrics import (
+    compute_repetition_metric_breakdown as _compute_repetition_metric_breakdown,
+    compute_repetition_word_accuracy as _compute_repetition_word_accuracy,
+    prediction_summary as _prediction_summary,
+    rolling_mean as _rolling_mean,
+)
 from lichtheim2.model import Lichtheim2Model
+from lichtheim2.repetition_evaluation import (
+    evaluate_one_trial as _evaluate_one_trial,
+    evaluate_predictions,
+)
 from lichtheim2.trainer import move_trial_to_device, train_step
 from lichtheim2.trials import SupervisedTrial, make_repetition_trial
 
@@ -84,123 +97,9 @@ def _item_label(item: WordItem | PseudowordItem) -> str:
 
 # ---------------------------------------------------------------------------
 # Split metric diagnostics
+# (moved to src/lichtheim2/metrics.py; imported as _compute_repetition_metric_breakdown
+#  and _compute_repetition_word_accuracy)
 # ---------------------------------------------------------------------------
-
-
-def _compute_repetition_metric_breakdown(
-    motor_input: torch.Tensor,
-    motor_output: torch.Tensor,
-    motor_targets_out: torch.Tensor,
-) -> dict:
-    """Compute split threshold and activation metrics for one repetition trial.
-
-    Separates input-phase silence from output-phase positive/negative unit
-    behavior, allowing diagnosis beyond the combined threshold_accuracy metric.
-
-    Interpretation:
-      If output_negative_threshold_acc rises quickly but
-      output_positive_threshold_acc stays near 0, the model is learning
-      zero-target suppression, not phoneme production.
-      mean_positive_output rising above 0.5 is typically the earliest signal
-      of phoneme production learning, before output_positive_threshold_acc or
-      argmax accuracy improve.
-
-    Args:
-        motor_input:       (T, motor_size) — input-phase motor outputs (ticks 0..T-1).
-                           All motor targets are zero during the input phase.
-        motor_output:      (T, motor_size) — output-phase motor outputs (ticks T..2T-1).
-        motor_targets_out: (T, motor_size) — output-phase one-hot targets.
-
-    Returns dict with keys:
-        input_silence_threshold_acc:   fraction of (input-phase, unit) pairs with output < 0.1.
-        output_negative_threshold_acc: fraction of output-phase negative-target (tick, unit)
-                                       pairs with output < 0.1.
-        output_positive_threshold_acc: fraction of output-phase ticks where the positive unit
-                                       (argmax of target) has output > 0.9.  [strict threshold]
-        mean_positive_output:          mean activation of the positive unit across output ticks.
-        mean_negative_output:          mean activation of negative units across output ticks.
-        mean_max_motor_output:         mean of per-tick max(motor_output) across output ticks.
-    """
-    T = motor_output.shape[0]
-
-    # Input phase: all targets = 0; report fraction suppressed below 0.1.
-    input_silence_threshold_acc = (motor_input < 0.1).float().mean().item()
-
-    # Output phase: split by positive (target=1) vs negative (target=0) units.
-    pos_indices = motor_targets_out.argmax(dim=1)         # (T,) — index of the 1 per tick
-    neg_mask    = motor_targets_out < 0.5                 # (T, motor_size) bool mask
-
-    # Device-safe indexing: arange on the same device as motor_output.
-    idx         = torch.arange(T, device=motor_output.device)
-    pos_outputs = motor_output[idx, pos_indices]          # (T,)
-    neg_outputs = motor_output[neg_mask]                  # (T × (motor_size − 1),) flattened
-
-    output_positive_threshold_acc = (pos_outputs > 0.9).float().mean().item()
-    output_negative_threshold_acc = (neg_outputs < 0.1).float().mean().item()
-    mean_positive_output          = pos_outputs.mean().item()
-    mean_negative_output          = neg_outputs.mean().item()
-    mean_max_motor_output         = motor_output.max(dim=1).values.mean().item()
-
-    return {
-        "input_silence_threshold_acc":    round(input_silence_threshold_acc, 4),
-        "output_negative_threshold_acc":  round(output_negative_threshold_acc, 4),
-        "output_positive_threshold_acc":  round(output_positive_threshold_acc, 4),
-        "mean_positive_output":           round(mean_positive_output, 4),
-        "mean_negative_output":           round(mean_negative_output, 4),
-        "mean_max_motor_output":          round(mean_max_motor_output, 4),
-    }
-
-
-def _compute_repetition_word_accuracy(
-    motor_input: torch.Tensor,
-    motor_output: torch.Tensor,
-    motor_targets_out: torch.Tensor,
-    radius: float = 0.1,
-) -> dict:
-    """Compute candidate paper-like word-level accuracy booleans for one trial.
-
-    Returns three per-trial boolean metrics evaluated using error radius `radius`.
-
-    output_all_units_within_radius:
-        True iff every (tick, unit) pair in the output phase satisfies
-        |motor_output - target| < radius. This is the main candidate paper-like
-        repetition word accuracy. [Open #9]
-
-    input_all_silent_within_radius:
-        True iff every input-phase motor unit is below `radius` (all input-phase
-        motor targets are zero, so this measures whether the model suppresses
-        motor activation during the input phase).
-
-    trial_all_supervised_units_within_radius:
-        True iff both output_all_units_within_radius AND
-        input_all_silent_within_radius are True. Stricter criterion whose
-        relevance depends on whether input-phase silence should be scored. [Open #9]
-
-    Note: eval_radius can differ from zero_error_radius used during training.
-    For example, train with zero_error_radius=0.0 (full gradient) and evaluate
-    with eval_radius=0.1 (paper-like criterion).
-
-    Args:
-        motor_input:       (T, motor_size) — input-phase motor outputs.
-        motor_output:      (T, motor_size) — output-phase motor outputs.
-        motor_targets_out: (T, motor_size) — output-phase targets (one-hot).
-        radius:            error radius for word-level evaluation (default 0.1).
-    """
-    output_within = (motor_output - motor_targets_out).abs() < radius
-    output_all_units_within_radius = bool(output_within.all().item())
-
-    input_within = motor_input < radius          # input-phase targets are all zero
-    input_all_silent_within_radius = bool(input_within.all().item())
-
-    trial_all_supervised_units_within_radius = (
-        output_all_units_within_radius and input_all_silent_within_radius
-    )
-
-    return {
-        "output_all_units_within_radius":           output_all_units_within_radius,
-        "input_all_silent_within_radius":            input_all_silent_within_radius,
-        "trial_all_supervised_units_within_radius":  trial_all_supervised_units_within_radius,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -241,289 +140,16 @@ def build_repetition_trials(
 # ---------------------------------------------------------------------------
 
 
-def _evaluate_one_trial(
-    model: Lichtheim2Model,
-    trial: SupervisedTrial,
-    cfg: ModelConfig,
-    inventory_symbols: list[str],
-    device: torch.device,
-    eval_radius: float = 0.1,
-) -> dict:
-    """Run one trial in eval mode (no_grad) and compute prediction metrics.
-
-    Argmax accuracy, mixed threshold accuracy, and exact match are computed on
-    the output phase (ticks T..2T-1) only. Split metrics from
-    _compute_repetition_metric_breakdown() cover both phases separately.
-
-    Note: threshold_accuracy mixes positive and negative target units. Use
-    output_positive_threshold_acc and output_negative_threshold_acc for
-    diagnostic purposes.
-    [Note #4] Sound input is the raw phoneme tensor (clamped), not sigmoided.
-    [Open #3] The ventral pathway is computed at every tick.
-    """
-    T = trial.phon_tensor.shape[0]
-    input_tick_indices  = list(range(T))           # ticks 0..T-1
-    output_tick_indices = list(range(T, 2 * T))    # ticks T..2T-1
-
-    trial_dev = move_trial_to_device(trial, device)
-    sem_zeros = torch.zeros(cfg.vATL_size, device=device)
-
-    model.eval()
-    with torch.no_grad():
-        results = model.run_trial(trial_dev.task, trial_dev.phon_tensor, sem_zeros, cfg)
-
-    # Stack input-phase motor activations: shape (T, motor_size)
-    motor_outputs_input = torch.stack(
-        [results[t].state.motor for t in input_tick_indices], dim=0
-    )
-    # Stack output-phase motor activations: shape (T, motor_size)
-    motor_outputs = torch.stack(
-        [results[t].state.motor for t in output_tick_indices], dim=0
-    )
-    # Output-phase targets from the trial: shape (T, motor_size)
-    motor_targets = trial_dev.motor_targets[T:]
-
-    # Argmax accuracy (one-hot encoding → argmax gives phoneme index)
-    target_indices = motor_targets.argmax(dim=1).tolist()
-    output_indices = motor_outputs.argmax(dim=1).tolist()
-    target_symbols = [inventory_symbols[i] for i in target_indices]
-    output_symbols = [inventory_symbols[i] for i in output_indices]
-    phoneme_correct = [t == p for t, p in zip(target_indices, output_indices)]
-    phoneme_acc = sum(phoneme_correct) / T if T > 0 else float("nan")
-
-    # Mixed threshold accuracy (output phase, positive + negative units combined).
-    # Note: dominated by negative units (38/39); use split metrics for diagnosis.
-    within_threshold = (motor_outputs - motor_targets).abs() < 0.1
-    threshold_acc = within_threshold.float().mean().item()
-
-    # Split metric breakdown: separates phases and unit polarities.
-    breakdown = _compute_repetition_metric_breakdown(
-        motor_outputs_input, motor_outputs, motor_targets
-    )
-
-    # Candidate paper-like word-level accuracy booleans.
-    word_acc = _compute_repetition_word_accuracy(
-        motor_outputs_input, motor_outputs, motor_targets, radius=eval_radius
-    )
-
-    return {
-        "label":              trial.label,
-        "item_id":            trial.item_id,
-        "T":                  T,
-        "n_ticks":            trial.n_ticks,
-        "target_phonemes":    target_symbols,
-        "predicted_phonemes": output_symbols,
-        "phoneme_accuracy":   round(phoneme_acc, 4),
-        "threshold_accuracy": round(threshold_acc, 4),
-        "exact_match":        all(phoneme_correct),
-        **breakdown,
-        **word_acc,
-    }
-
-
-def evaluate_predictions(
-    model: Lichtheim2Model,
-    trials: list[SupervisedTrial],
-    cfg: ModelConfig,
-    inventory_symbols: list[str],
-    device: torch.device,
-    eval_radius: float = 0.1,
-) -> list[dict]:
-    """Evaluate predictions for all trials. Returns one record per trial."""
-    return [
-        _evaluate_one_trial(model, trial, cfg, inventory_symbols, device, eval_radius)
-        for trial in trials
-    ]
-
-
-def _prediction_summary(preds: list[dict]) -> dict:
-    """Aggregate per-trial prediction dicts into a named summary dict.
-
-    All float values are float('nan') when preds is empty.
-    """
-    nan = float("nan")
-    if not preds:
-        return {
-            "avg_phoneme_accuracy":              nan,
-            "avg_threshold_accuracy":            nan,
-            "n_exact":                           0,
-            "avg_input_silence_threshold_acc":   nan,
-            "avg_output_negative_threshold_acc": nan,
-            "avg_output_positive_threshold_acc": nan,
-            "avg_mean_positive_output":          nan,
-            "avg_mean_negative_output":          nan,
-            "avg_mean_max_motor_output":         nan,
-            "n_output_correct":                  0,
-            "n_input_silent":                    0,
-            "n_strict_correct":                  0,
-            "paper_like_output_word_accuracy":   nan,
-            "input_silence_word_accuracy":       nan,
-            "candidate_strict_trial_accuracy":   nan,
-        }
-    n = len(preds)
-    n_output_correct = sum(1 for p in preds if p["output_all_units_within_radius"])
-    n_input_silent   = sum(1 for p in preds if p["input_all_silent_within_radius"])
-    n_strict_correct = sum(1 for p in preds if p["trial_all_supervised_units_within_radius"])
-    return {
-        "avg_phoneme_accuracy":              sum(p["phoneme_accuracy"]              for p in preds) / n,
-        "avg_threshold_accuracy":            sum(p["threshold_accuracy"]            for p in preds) / n,
-        "n_exact":                           sum(1 for p in preds if p["exact_match"]),
-        "avg_input_silence_threshold_acc":   sum(p["input_silence_threshold_acc"]   for p in preds) / n,
-        "avg_output_negative_threshold_acc": sum(p["output_negative_threshold_acc"] for p in preds) / n,
-        "avg_output_positive_threshold_acc": sum(p["output_positive_threshold_acc"] for p in preds) / n,
-        "avg_mean_positive_output":          sum(p["mean_positive_output"]          for p in preds) / n,
-        "avg_mean_negative_output":          sum(p["mean_negative_output"]          for p in preds) / n,
-        "avg_mean_max_motor_output":         sum(p["mean_max_motor_output"]         for p in preds) / n,
-        "n_output_correct":                  n_output_correct,
-        "n_input_silent":                    n_input_silent,
-        "n_strict_correct":                  n_strict_correct,
-        "paper_like_output_word_accuracy":   n_output_correct / n,
-        "input_silence_word_accuracy":       n_input_silent   / n,
-        "candidate_strict_trial_accuracy":   n_strict_correct / n,
-    }
+# (evaluate_one_trial, evaluate_predictions, prediction_summary moved to
+#  src/lichtheim2/repetition_evaluation.py and src/lichtheim2/metrics.py;
+#  imported above as _evaluate_one_trial, evaluate_predictions, _prediction_summary)
 
 
 # ---------------------------------------------------------------------------
 # Post-epoch eval loss decomposition (Phase 3i diagnostic)
+# (moved to src/lichtheim2/loss_decomposition.py;
+#  imported above as _compute_trial_loss_decomposition, _compute_epoch_loss_decomp)
 # ---------------------------------------------------------------------------
-
-
-def _compute_trial_loss_decomposition(
-    tick_results: list,
-    trial: SupervisedTrial,
-    zero_error_radius: float,
-) -> dict:
-    """Decompose motor BCE into phase and positive/negative unit components.
-
-    Called in eval mode under torch.no_grad(); does NOT affect gradients.
-    Applies the same dead-zone logic as losses.py (units inside the dead-zone
-    are excluded from both sums and active counts).
-
-    Phase split: T = trial.phon_tensor.shape[0].
-    Input phase:  ticks 0..T-1  (motor targets are all zero).
-    Output phase: ticks T..2T-1 (motor targets are the phoneme one-hot).
-
-    Returns dict with keys (all per-trial sums, not per-unit averages):
-        input_bce, output_bce           — raw sums of alive BCE by phase
-        motor_bce                       — input_bce + output_bce
-        output_pos_bce                  — alive BCE on the 1 positive unit per output tick
-        output_neg_bce                  — alive BCE on the 38 negative units per output tick
-        n_active_input                  — alive (tick, unit) count in input phase
-        n_active_output_pos             — alive positive-unit count in output phase
-        n_active_output_neg             — alive negative-unit count in output phase
-    """
-    T = trial.phon_tensor.shape[0]
-
-    motor_outputs = torch.stack([r.state.motor for r in tick_results], dim=0)  # (2T, motor_size)
-    motor_targets = trial.motor_targets   # (2T, motor_size)
-
-    raw_bce = F.binary_cross_entropy(motor_outputs, motor_targets, reduction="none")  # (2T, motor_size)
-
-    if zero_error_radius > 0.0:
-        dead  = (motor_outputs - motor_targets).abs() < zero_error_radius
-    else:
-        dead  = torch.zeros_like(raw_bce, dtype=torch.bool)
-    alive = ~dead  # (2T, motor_size)
-
-    # Phase split
-    raw_in,  raw_out  = raw_bce[:T],  raw_bce[T:]
-    alive_in, alive_out = alive[:T], alive[T:]
-
-    # Positive/negative split in output phase (one positive per row)
-    targets_out = motor_targets[T:]   # (T, motor_size)
-    pos_mask    = targets_out >= 0.5  # (T, motor_size): one True per output tick
-    neg_mask    = ~pos_mask
-
-    alive_out_pos = alive_out & pos_mask
-    alive_out_neg = alive_out & neg_mask
-
-    input_bce       = float((raw_in  * alive_in.float()).sum().item())
-    output_pos_bce  = float((raw_out * alive_out_pos.float()).sum().item())
-    output_neg_bce  = float((raw_out * alive_out_neg.float()).sum().item())
-    output_bce      = output_pos_bce + output_neg_bce
-    motor_bce       = input_bce + output_bce
-
-    n_active_input      = int(alive_in.sum().item())
-    n_active_output_pos = int(alive_out_pos.sum().item())
-    n_active_output_neg = int(alive_out_neg.sum().item())
-
-    return {
-        "input_bce":           input_bce,
-        "output_bce":          output_bce,
-        "motor_bce":           motor_bce,
-        "output_pos_bce":      output_pos_bce,
-        "output_neg_bce":      output_neg_bce,
-        "n_active_input":      n_active_input,
-        "n_active_output_pos": n_active_output_pos,
-        "n_active_output_neg": n_active_output_neg,
-    }
-
-
-def _compute_epoch_loss_decomp(
-    model: Lichtheim2Model,
-    trials: list[SupervisedTrial],
-    cfg: ModelConfig,
-    zero_error_radius: float,
-    device: torch.device,
-) -> dict:
-    """Run an eval-mode forward pass over all trials and return mean decomposed metrics.
-
-    This is a POST-EPOCH DIAGNOSTIC PASS — it runs after the online training
-    updates for the epoch have completed. Values reflect the model at the end of
-    the epoch, not during training. Because each trial is re-evaluated with the
-    updated weights (rather than the weights at the time of each online update),
-    these metrics are NOT numerically equal to avg_loss from run_training().
-    They are prefixed 'avg_eval_' to make this distinction explicit.
-
-    Sets model.eval() internally. Caller must restore model.train() afterward.
-    """
-    model.eval()
-
-    keys = [
-        "input_bce", "output_bce", "motor_bce",
-        "output_pos_bce", "output_neg_bce",
-        "n_active_input", "n_active_output_pos", "n_active_output_neg",
-    ]
-    accum = {k: 0.0 for k in keys}
-
-    with torch.no_grad():
-        for trial in trials:
-            trial_dev = move_trial_to_device(trial, device)
-            sem_in    = torch.zeros(cfg.vATL_size, device=device)
-            tick_results = model.run_trial(
-                trial_dev.task, trial_dev.phon_tensor, sem_in, cfg
-            )
-            d = _compute_trial_loss_decomposition(tick_results, trial_dev, zero_error_radius)
-            for k in keys:
-                accum[k] += d[k]
-
-    n = len(trials)
-
-    def _safe_per_active(bce: float, count: float) -> float:
-        return round(bce / count, 6) if count > 0.0 else float("nan")
-
-    avg_input_bce       = round(accum["input_bce"]       / n, 6)
-    avg_output_bce      = round(accum["output_bce"]      / n, 6)
-    avg_motor_bce       = round(accum["motor_bce"]       / n, 6)
-    avg_output_pos_bce  = round(accum["output_pos_bce"]  / n, 6)
-    avg_output_neg_bce  = round(accum["output_neg_bce"]  / n, 6)
-    avg_n_act_in        = round(accum["n_active_input"]      / n, 2)
-    avg_n_act_out_pos   = round(accum["n_active_output_pos"] / n, 2)
-    avg_n_act_out_neg   = round(accum["n_active_output_neg"] / n, 2)
-
-    return {
-        "avg_eval_input_bce":              avg_input_bce,
-        "avg_eval_output_bce":             avg_output_bce,
-        "avg_eval_motor_bce":              avg_motor_bce,
-        "avg_eval_output_pos_bce":         avg_output_pos_bce,
-        "avg_eval_output_neg_bce":         avg_output_neg_bce,
-        "avg_eval_n_active_input":         avg_n_act_in,
-        "avg_eval_n_active_output_pos":    avg_n_act_out_pos,
-        "avg_eval_n_active_output_neg":    avg_n_act_out_neg,
-        "avg_eval_input_bce_per_active":   _safe_per_active(accum["input_bce"],      accum["n_active_input"]),
-        "avg_eval_output_pos_bce_per_active": _safe_per_active(accum["output_pos_bce"], accum["n_active_output_pos"]),
-        "avg_eval_output_neg_bce_per_active": _safe_per_active(accum["output_neg_bce"], accum["n_active_output_neg"]),
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -678,15 +304,6 @@ def save_predictions(run_dir: Path, predictions: list[dict], filename: str) -> N
     """Save list of prediction dicts to a JSON file."""
     with open(run_dir / filename, "w") as f:
         json.dump(predictions, f, indent=2)
-
-
-def _rolling_mean(values: list[float], window: int) -> list[float]:
-    """Left-aligned trailing rolling mean; no external deps."""
-    out = []
-    for i in range(len(values)):
-        start = max(0, i - window + 1)
-        out.append(sum(values[start : i + 1]) / (i - start + 1))
-    return out
 
 
 def save_loss_curve(run_dir: Path, epoch_metrics: list[dict], rolling_window: int = 10) -> None:

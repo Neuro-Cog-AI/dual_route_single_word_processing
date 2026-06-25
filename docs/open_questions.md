@@ -246,7 +246,7 @@ These items were open at project start but are now confirmed from the paper or s
 | Item | Decision | Source |
 |------|----------|--------|
 | Training/data direction | English/NWR-style, variable-length phoneme sequences | Project guidance |
-| Loss function | Cross-entropy | `[Paper]` |
+| Loss function | Cross-entropy | `[Paper]` — in this codebase, "cross-entropy" means element-wise BCE (`F.binary_cross_entropy`) applied to independent sigmoid outputs, one per unit. This is **not** `torch.nn.CrossEntropyLoss`, which applies softmax and treats all units as a probability distribution over classes. See `docs/diagnostic_vs_faithful.md §5` for the full reasoning and the provisional caveat. |
 | Zero-error radius | 0.1 (no gradient if \|output − target\| < 0.1) | `[Paper]` |
 | Learning rate schedule | 0.5 until epoch 150; −0.1 per 10 epochs until epoch 180; fixed 0.1 until epoch 200 | `[Paper]` |
 | Weight initialisation | Uniform [−1, 1] most; [−0.5, 0.5] recurrent; bias to hidden = −1 | `[Paper]` |
